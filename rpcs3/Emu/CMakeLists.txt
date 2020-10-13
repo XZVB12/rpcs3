@@ -1,5 +1,6 @@
 ﻿add_library(rpcs3_emu
 	IdManager.cpp
+	localized_string.cpp
 	System.cpp
 	system_config.cpp
 	system_config_types.cpp
@@ -7,6 +8,9 @@
 	GDB.cpp
 	title.cpp
 )
+
+# prevent WolfSSL from warning about not having harden options
+add_compile_definitions(WC_NO_HARDEN)
 
 target_link_libraries(rpcs3_emu
 	PRIVATE
@@ -364,6 +368,7 @@ target_sources(rpcs3_emu PRIVATE
 target_sources(rpcs3_emu PRIVATE
 	NP/fb_helpers.cpp
 	NP/np_handler.cpp
+	NP/signaling_handler.cpp
 	NP/np_structs_extra.cpp
 	NP/rpcn_client.cpp
 	NP/rpcn_config.cpp
@@ -441,6 +446,7 @@ if(TARGET 3rdparty_vulkan)
 		RSX/VK/VKMemAlloc.cpp
 		RSX/VK/VKPresent.cpp
 		RSX/VK/VKProgramPipeline.cpp
+		RSX/VK/VKQueryPool.cpp
 		RSX/VK/VKRenderPass.cpp
 		RSX/VK/VKResolveHelper.cpp
 		RSX/VK/VKResourceManager.cpp

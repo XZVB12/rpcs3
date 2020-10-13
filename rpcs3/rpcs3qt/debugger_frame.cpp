@@ -234,7 +234,9 @@ void debugger_frame::keyPressEvent(QKeyEvent* event)
 
 	const u32 pc = m_debugger_list->m_pc + i * 4;
 
-	if (QApplication::keyboardModifiers() & Qt::ControlModifier)
+	const auto modifiers = QApplication::keyboardModifiers();
+
+	if (modifiers & Qt::ControlModifier)
 	{
 		switch (event->key())
 		{
@@ -261,7 +263,21 @@ void debugger_frame::keyPressEvent(QKeyEvent* event)
 			dlg->show();
 			return;
 		}
+		case Qt::Key_S:
+		{
+			if (modifiers & Qt::AltModifier)
+			{
+				const auto cpu = this->cpu.lock();
 
+				if (!cpu || cpu->id_type() == 1)
+				{
+					return;
+				}
+
+				static_cast<spu_thread*>(cpu.get())->capture_local_storage();
+			}
+			return;
+		}
 		case Qt::Key_F10:
 		{
 			DoStep(true);
@@ -478,7 +494,7 @@ void debugger_frame::ShowGotoAddressDialog()
 	expression_input->setFixedWidth(190);
 
 	// Ok/Cancel
-	QPushButton* button_ok = new QPushButton(tr("Ok"));
+	QPushButton* button_ok = new QPushButton(tr("OK"));
 	QPushButton* button_cancel = new QPushButton(tr("Cancel"));
 
 	hbox_address_preview_panel->addWidget(address_preview_label);

@@ -164,6 +164,7 @@ set(CMAKE_INSTALL_PREFIX ${CMAKE_INSTALL_PREFIX_OLD})
 
 # xxHash
 set(XXHASH_BUNDLED_MODE ON)
+set(XXHASH_BUILD_XXHSUM OFF)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Make xxHash build static libs")
 add_subdirectory(xxHash/cmake_unofficial EXCLUDE_FROM_ALL)
 target_include_directories(xxhash INTERFACE xxHash)
@@ -417,7 +418,30 @@ endif()
 include(llvm.cmake)
 
 # WOLFSSL
-add_subdirectory(wolfssl EXCLUDE_FROM_ALL)
+if(USE_SYSTEM_WOLFSSL)
+	message("-- RPCS3: using shared wolfssl")
+	find_package(WolfSSL REQUIRED)
+	add_library(wolfssl INTERFACE)
+	target_link_libraries(wolfssl INTERFACE WolfSSL_LIBRARIES)
+	target_include_directories(wolfssl INTERFACE WolfSSL_INCLUDE_DIRS)
+else()
+	SET(BUILD_TESTS NO CACHE BOOL "Build test applications")
+	add_compile_definitions(HAVE_FFDHE_2048 TFM_TIMING_RESISTANT ECC_TIMING_RESISTANT
+					WC_RSA_BLINDING HAVE_AESGCM WOLFSSL_SHA512 WOLFSSL_SHA384 NO_DSA HAVE_ECC TFM_ECC256 ECC_SHAMIR
+					NO_RC4 NO_HC128 NO_RABBIT WOLFSSL_SHA224 WOLFSSL_SHA3 WOLFSSL_SHAKE256 HAVE_POLY1305
+					HAVE_ONE_TIME_AUTH HAVE_CHACHA HAVE_HASHDRBG HAVE_TLS_EXTENSIONS HAVE_SNI HAVE_SUPPORTED_CURVES
+					HAVE_EXTENDED_MASTER NO_RC4 HAVE_ENCRYPT_THEN_MAC NO_PSK NO_MD4
+					WC_NO_ASYNC_THREADING OPENSSL_EXTRA WOLFSSL_DES_ECB WC_NO_HARDEN)
+	set(ENABLED_HARDEN OFF CACHE BOOL "Disable Harden")
+	add_subdirectory(wolfssl EXCLUDE_FROM_ALL)
+	target_include_directories(wolfssl INTERFACE "wolfssl/")
+	# This is needed for CURL
+	configure_file(${CMAKE_CURRENT_SOURCE_DIR}/wolfssl/wolfssl/options.h.in ${CMAKE_CURRENT_BINARY_DIR}/wolfssl/wolfssl/options.h)
+	set(WolfSSL_LIBRARY "${CMAKE_CURRENT_BINARY_DIR}/wolfssl/libwolfssl.a")
+	set(WolfSSL_LIBRARIES "${CMAKE_CURRENT_BINARY_DIR}/wolfssl/libwolfssl.a")
+	set(WolfSSL_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/wolfssl/" "${CMAKE_CURRENT_BINARY_DIR}/wolfssl/")
+	set(WolfSSL_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/wolfssl/" "${CMAKE_CURRENT_BINARY_DIR}/wolfssl/")
+endif()
 
 # CURL
 if(USE_SYSTEM_CURL)
@@ -427,6 +451,11 @@ if(USE_SYSTEM_CURL)
 	target_link_libraries(libcurl INTERFACE CURL::libcurl)
 else()
 	message("-- RPCS3: building libcurl + wolfssl submodules")
+	option(BUILD_CURL_EXE "Set to ON to build curl executable." OFF)
+	option(CMAKE_USE_WOLFSSL "enable wolfSSL for SSL/TLS" ON)
+	option(HTTP_ONLY "disables all protocols except HTTP (This overrides all CURL_DISABLE_* options)" ON)
+	option(CURL_ZLIB "Set to ON to enable building curl with zlib support." OFF)
+	set(CURL_CA_PATH "none" CACHE STRING "Location of default CA path. Set 'none' to disable or 'auto' for auto-detection. Defaults to 'auto'.")
 	add_subdirectory(curl EXCLUDE_FROM_ALL)
 endif()
 
@@ -453,5 +482,5 @@ add_library(3rdparty::vulkan ALIAS ${VULKAN_TARGET})
 add_library(3rdparty::openal ALIAS 3rdparty_openal)
 add_library(3rdparty::ffmpeg ALIAS 3rdparty_ffmpeg)
 add_library(3rdparty::glew ALIAS 3rdparty_glew)
-add_library(3rdparty::wolfssl ALIAS wolfssl-3-static)
+add_library(3rdparty::wolfssl ALIAS wolfssl)
 add_library(3rdparty::libcurl ALIAS libcurl)
