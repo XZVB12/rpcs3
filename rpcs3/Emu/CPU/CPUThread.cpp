@@ -8,6 +8,7 @@
 #include "Emu/GDB.h"
 #include "Emu/Cell/PPUThread.h"
 #include "Emu/Cell/SPUThread.h"
+#include "Emu/perf_meter.hpp"
 
 #include <thread>
 #include <unordered_map>
@@ -33,6 +34,7 @@ void fmt_class_string<cpu_flag>::format(std::string& out, u64 arg)
 		case cpu_flag::stop: return "STOP";
 		case cpu_flag::exit: return "EXIT";
 		case cpu_flag::wait: return "w";
+		case cpu_flag::temp: return "t";
 		case cpu_flag::pause: return "p";
 		case cpu_flag::suspend: return "s";
 		case cpu_flag::ret: return "ret";
@@ -530,6 +532,7 @@ bool cpu_thread::check_state() noexcept
 	}
 
 	bool cpu_sleep_called = false;
+	bool cpu_can_stop = true;
 	bool escape, retval;
 	u64 susp_ctr = -1;
 
@@ -548,6 +551,14 @@ bool cpu_thread::check_state() noexcept
 			else
 			{
 				susp_ctr = -1;
+			}
+
+			if (flags & cpu_flag::temp)
+			{
+				// Sticky flag, indicates check_state() is not allowed to return true
+				flags -= cpu_flag::temp;
+				cpu_can_stop = false;
+				store = true;
 			}
 
 			if (flags & cpu_flag::signal)
@@ -589,11 +600,12 @@ bool cpu_thread::check_state() noexcept
 					store = true;
 				}
 
-				retval = true;
+				retval = cpu_can_stop;
 			}
 
-			if (flags & cpu_flag::dbg_step)
+			if (cpu_can_stop && flags & cpu_flag::dbg_step)
 			{
+				// Can't process dbg_step if we only paused temporarily
 				flags += cpu_flag::dbg_pause;
 				flags -= cpu_flag::dbg_step;
 				store = true;
@@ -739,7 +751,7 @@ std::string cpu_thread::dump_misc() const
 	return fmt::format("Type: %s\n" "State: %s\n", typeid(*this).name(), state.load());
 }
 
-void cpu_thread::suspend_work::push(cpu_thread* _this) noexcept
+bool cpu_thread::suspend_work::push(cpu_thread* _this, bool cancel_if_not_suspended) noexcept
 {
 	// Can't allow pre-set wait bit (it'd be a problem)
 	verify(HERE), !_this || !(_this->state & cpu_flag::wait);
@@ -758,6 +770,12 @@ void cpu_thread::suspend_work::push(cpu_thread* _this) noexcept
 		// Load current head
 		next = queue.load();
 
+		if (!next && cancel_if_not_suspended) [[unlikely]]
+		{
+			// Give up if not suspended
+			return false;
+		}
+
 		if (!_this && next)
 		{
 			// If _this == nullptr, it only works if this is the first workload pushed
@@ -769,8 +787,20 @@ void cpu_thread::suspend_work::push(cpu_thread* _this) noexcept
 
 	if (!next)
 	{
+		// Monitor the performance only of the actual suspend processing owner
+		perf_meter<"SUSPEND"_u64> perf0;
+
 		// First thread to push the work to the workload list pauses all threads and processes it
 		std::lock_guard lock(ctr->cpu_suspend_lock);
+
+		// Try to prefetch cpu->state earlier
+		for_all_cpu([&](cpu_thread* cpu)
+		{
+			if (cpu != _this)
+			{
+				_m_prefetchw(&cpu->state);
+			}
+		});
 
 		// Copy of thread bits
 		decltype(ctr->cpu_copy_bits) copy2{};
@@ -794,22 +824,27 @@ void cpu_thread::suspend_work::push(cpu_thread* _this) noexcept
 			}
 		});
 
-		busy_wait(500);
-
 		while (std::accumulate(std::begin(ctr->cpu_copy_bits), std::end(ctr->cpu_copy_bits), u64{0}, std::bit_or()))
 		{
 			// Check only CPUs which haven't acknowledged their waiting state yet
 			for_all_cpu<true>([&](cpu_thread* cpu, u64 index)
 			{
+				verify(HERE), cpu->state & cpu_flag::pause;
+
 				if (cpu->state & cpu_flag::wait)
 				{
 					ctr->cpu_copy_bits[index / 64] &= ~(1ull << (index % 64));
 				}
 			});
+
+			_mm_pause();
 		}
 
 		// Extract queue and reverse element order (FILO to FIFO) (TODO: maybe leave order as is?)
 		auto* head = queue.exchange(nullptr);
+
+		s8 min_prio = head->prio;
+		s8 max_prio = head->prio;
 
 		if (auto* prev = head->next)
 		{
@@ -821,14 +856,33 @@ void cpu_thread::suspend_work::push(cpu_thread* _this) noexcept
 				prev->next = head;
 
 				head = std::exchange(prev, pre2);
+
+				// Fill priority range
+				min_prio = std::min<s8>(min_prio, head->prio);
+				max_prio = std::max<s8>(max_prio, head->prio);
 			}
 			while (prev);
 		}
 
-		// Execute all stored workload
-		for (; head; head = head->next)
+		for_all_cpu<true>([&](cpu_thread* cpu)
 		{
-			head->exec(head->func_ptr, head->res_buf);
+			_m_prefetchw(&cpu->state);
+		});
+
+		_m_prefetchw(&g_suspend_counter);
+
+		// Execute all stored workload
+		for (s32 prio = max_prio; prio >= min_prio; prio--)
+		{
+			// ... according to priorities
+			for (auto work = head; work; work = work->next)
+			{
+				// Properly sorting single-linked list may require to optimize the loop
+				if (work->prio == prio)
+				{
+					work->exec(work->func_ptr, work->res_buf);
+				}
+			}
 		}
 
 		// Finalization
@@ -854,10 +908,11 @@ void cpu_thread::suspend_work::push(cpu_thread* _this) noexcept
 		}
 
 		_this->check_state();
-		return;
+		return true;
 	}
 
 	g_suspend_counter.notify_all();
+	return true;
 }
 
 void cpu_thread::stop_all() noexcept
@@ -889,13 +944,12 @@ void cpu_thread::stop_all() noexcept
 		std::this_thread::sleep_for(10ms);
 	}
 
-	sys_log.notice("All CPU threads have been stopped. [+: %u; suspends: %u]", +g_threads_created, +g_suspend_counter);
+	sys_log.notice("All CPU threads have been stopped. [+: %u]", +g_threads_created);
 
 	std::lock_guard lock(g_fxo->get<cpu_counter>()->cpu_suspend_lock);
 
 	g_threads_deleted -= g_threads_created.load();
 	g_threads_created = 0;
-	g_suspend_counter = 0;
 }
 
 void cpu_thread::flush_profilers() noexcept

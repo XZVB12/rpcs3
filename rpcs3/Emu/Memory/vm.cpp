@@ -14,7 +14,7 @@
 #include "Emu/Cell/lv2/sys_memory.h"
 #include "Emu/RSX/GSRender.h"
 #include "Emu/Cell/SPURecompiler.h"
-#include <atomic>
+#include "Emu/perf_meter.hpp"
 #include <thread>
 #include <deque>
 
@@ -391,6 +391,8 @@ namespace vm
 
 		if (addr >= 0x10000)
 		{
+			perf_meter<"SUSPEND"_u64> perf0;
+
 			for (auto lock = g_locks.cbegin(), end = lock + g_cfg.core.ppu_threads; lock != end; lock++)
 			{
 				if (auto ptr = +*lock; ptr && !(ptr->state & cpu_flag::memory))
@@ -507,25 +509,18 @@ namespace vm
 
 	void reservation_op_internal(u32 addr, std::function<bool()> func)
 	{
-		const bool ok = cpu_thread::suspend_all(get_current_cpu_thread(), [&]
+		cpu_thread::suspend_all(get_current_cpu_thread(), [&]
 		{
 			if (func())
 			{
 				// Success, release all locks if necessary
 				vm::reservation_acquire(addr, 128) += 127;
-				return true;
 			}
 			else
 			{
 				vm::reservation_acquire(addr, 128) -= 1;
-				return false;
 			}
 		});
-
-		if (ok)
-		{
-			vm::reservation_notifier(addr, 128).notify_all();
-		}
 	}
 
 	void reservation_escape_internal()
