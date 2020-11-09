@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "types.h"
 #include "util/atomic.hpp"
@@ -9,7 +9,6 @@
 #include <string_view>
 
 #include "mutex.h"
-#include "cond.h"
 #include "lockless.h"
 
 // Report error and call std::abort(), defined in main.cpp

@@ -2,11 +2,11 @@
 
 #include "vm.h"
 #include "vm_locking.h"
-#include "Utilities/cond.h"
 #include "util/atomic.hpp"
 #include <functional>
 
 extern bool g_use_rtm;
+extern u64 g_rtm_tx_limit2;
 
 namespace vm
 {
@@ -70,8 +70,8 @@ namespace vm
 	// TODO: remove and make it external
 	void reservation_op_internal(u32 addr, std::function<bool()> func);
 
-	template <bool Ack = false, typename T, typename AT = u32, typename F>
-	SAFE_BUFFERS inline auto reservation_op(_ptr_base<T, AT> ptr, F op)
+	template <bool Ack = false, typename CPU, typename T, typename AT = u32, typename F>
+	SAFE_BUFFERS inline auto reservation_op(CPU& cpu, _ptr_base<T, AT> ptr, F op)
 	{
 		// Atomic operation will be performed on aligned 128 bytes of data, so the data size and alignment must comply
 		static_assert(sizeof(T) <= 128 && alignof(T) == sizeof(T), "vm::reservation_op: unsupported type");
@@ -87,15 +87,16 @@ namespace vm
 		// Use 128-byte aligned addr
 		const u32 addr = static_cast<u32>(ptr.addr()) & -128;
 
+		auto& res = vm::reservation_acquire(addr, 128);
+		_m_prefetchw(&res);
+
 		if (g_use_rtm)
 		{
-			auto& res = vm::reservation_acquire(addr, 128);
-			_m_prefetchw(&res);
-
 			// Stage 1: single optimistic transaction attempt
 			unsigned status = _XBEGIN_STARTED;
-			unsigned count = 0;
 			u64 _old = 0;
+
+			auto stamp0 = __rdtsc(), stamp1 = stamp0, stamp2 = stamp0;
 
 #ifndef _MSC_VER
 			__asm__ goto ("xbegin %l[stage2];" ::: "memory" : stage2);
@@ -124,7 +125,7 @@ namespace vm
 					_xend();
 #endif
 					if constexpr (Ack)
-						res.notify_all();
+						res.notify_all(-128);
 					return;
 				}
 				else
@@ -138,7 +139,7 @@ namespace vm
 						_xend();
 #endif
 						if constexpr (Ack)
-							res.notify_all();
+							res.notify_all(-128);
 						return result;
 					}
 					else
@@ -157,6 +158,7 @@ namespace vm
 #ifndef _MSC_VER
 			__asm__ volatile ("mov %%eax, %0;" : "=r" (status) :: "memory");
 #endif
+			stamp1 = __rdtsc();
 
 			// Touch memory if transaction failed with status 0
 			if (!status)
@@ -167,12 +169,17 @@ namespace vm
 			// Stage 2: try to lock reservation first
 			_old = res.fetch_add(1);
 
-			// Also identify atomic op
-			count = 1;
+			// Compute stamps excluding memory touch
+			stamp2 = __rdtsc() - (stamp1 - stamp0);
 
-			// Start lightened transaction (TODO: tweaking)
-			for (; !(_old & rsrv_unique_lock) && count < 60; count++)
+			// Start lightened transaction
+			for (; !(_old & vm::rsrv_unique_lock) && stamp2 - stamp0 <= g_rtm_tx_limit2; stamp2 = __rdtsc())
 			{
+				if (cpu.has_pause_flag())
+				{
+					break;
+				}
+
 #ifndef _MSC_VER
 				__asm__ goto ("xbegin %l[retry];" ::: "memory" : retry);
 #else
@@ -193,7 +200,7 @@ namespace vm
 #endif
 					res += 127;
 					if (Ack)
-						res.notify_all();
+						res.notify_all(-128);
 					return;
 				}
 				else
@@ -207,7 +214,7 @@ namespace vm
 #endif
 						res += 127;
 						if (Ack)
-							res.notify_all();
+							res.notify_all(-128);
 						return result;
 					}
 					else
@@ -242,7 +249,7 @@ namespace vm
 				});
 
 				if constexpr (Ack)
-					res.notify_all();
+					res.notify_all(-128);
 				return;
 			}
 			else
@@ -262,24 +269,24 @@ namespace vm
 				});
 
 				if (Ack && result)
-					res.notify_all();
+					res.notify_all(-128);
 				return result;
 			}
 		}
 
-		// Perform heavyweight lock
-		auto [res, rtime] = vm::reservation_lock(addr);
+		// Lock reservation and perform heavyweight lock
+		reservation_shared_lock_internal(res);
 
 		if constexpr (std::is_void_v<std::invoke_result_t<F, T&>>)
 		{
 			{
 				vm::writer_lock lock(addr);
 				std::invoke(op, *sptr);
-				res += 64;
+				res += 127;
 			}
 
 			if constexpr (Ack)
-				res.notify_all();
+				res.notify_all(-128);
 			return;
 		}
 		else
@@ -290,16 +297,16 @@ namespace vm
 
 				if ((result = std::invoke(op, *sptr)))
 				{
-					res += 64;
+					res += 127;
 				}
 				else
 				{
-					res -= 64;
+					res -= 1;
 				}
 			}
 
 			if (Ack && result)
-				res.notify_all();
+				res.notify_all(-128);
 			return result;
 		}
 	}
@@ -309,13 +316,10 @@ namespace vm
 
 	// Read memory value in pseudo-atomic manner
 	template <typename CPU, typename T, typename AT = u32, typename F>
-	SAFE_BUFFERS inline auto reservation_peek(CPU&& cpu, _ptr_base<T, AT> ptr, F op)
+	SAFE_BUFFERS inline auto peek_op(CPU&& cpu, _ptr_base<T, AT> ptr, F op)
 	{
 		// Atomic operation will be performed on aligned 128 bytes of data, so the data size and alignment must comply
-		static_assert(sizeof(T) <= 128 && alignof(T) == sizeof(T), "vm::reservation_peek: unsupported type");
-
-		// Use "super" pointer to prevent access violation handling during atomic op
-		const auto sptr = vm::get_super_ptr<const T>(static_cast<u32>(ptr.addr()));
+		static_assert(sizeof(T) <= 128 && alignof(T) == sizeof(T), "vm::peek_op: unsupported type");
 
 		// Use 128-byte aligned addr
 		const u32 addr = static_cast<u32>(ptr.addr()) & -128;
@@ -340,7 +344,7 @@ namespace vm
 			// Observe data non-atomically and make sure no reservation updates were made
 			if constexpr (std::is_void_v<std::invoke_result_t<F, const T&>>)
 			{
-				std::invoke(op, *sptr);
+				std::invoke(op, *ptr);
 
 				if (rtime == vm::reservation_acquire(addr, 128))
 				{
@@ -349,7 +353,7 @@ namespace vm
 			}
 			else
 			{
-				auto res = std::invoke(op, *sptr);
+				auto res = std::invoke(op, *ptr);
 
 				if (rtime == vm::reservation_acquire(addr, 128))
 				{
@@ -360,7 +364,7 @@ namespace vm
 	}
 
 	template <bool Ack = false, typename T, typename F>
-	SAFE_BUFFERS inline auto reservation_light_op(T& data, F op)
+	SAFE_BUFFERS inline auto light_op(T& data, F op)
 	{
 		// Optimized real ptr -> vm ptr conversion, simply UB if out of range
 		const u32 addr = static_cast<u32>(reinterpret_cast<const u8*>(&data) - g_base_addr);
@@ -371,7 +375,18 @@ namespace vm
 		// "Lock" reservation
 		auto& res = vm::reservation_acquire(addr, 128);
 
-		if (res.fetch_add(1) & vm::rsrv_unique_lock) [[unlikely]]
+		auto [_old, _ok] = res.fetch_op([&](u64& r)
+		{
+			if (r & vm::rsrv_unique_lock)
+			{
+				return false;
+			}
+
+			r += 1;
+			return true;
+		});
+
+		if (!_ok) [[unlikely]]
 		{
 			vm::reservation_shared_lock_internal(res);
 		}
@@ -383,7 +398,7 @@ namespace vm
 
 			if constexpr (Ack)
 			{
-				res.notify_all();
+				res.notify_all(-128);
 			}
 		}
 		else
@@ -393,7 +408,7 @@ namespace vm
 
 			if constexpr (Ack)
 			{
-				res.notify_all();
+				res.notify_all(-128);
 			}
 
 			return result;

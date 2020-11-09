@@ -1,12 +1,12 @@
 ﻿#include "stdafx.h"
 #include "Emu/Cell/PPUModule.h"
 
-#include "Utilities/VirtualMemory.h"
 #include "Utilities/bin_patch.h"
 #include "Utilities/StrUtil.h"
 #include "Crypto/sha1.h"
 #include "Crypto/unself.h"
 #include "Loader/ELF.h"
+#include "Emu/System.h"
 #include "Emu/VFS.h"
 
 #include "Emu/Cell/PPUOpcodes.h"
@@ -746,7 +746,7 @@ static void ppu_check_patch_spu_images(const ppu_segment& seg)
 				if (!name.empty())
 				{
 					fmt::append(dump, "\n\tSPUNAME: '%s'", name);
-				}	
+				}
 			}
 		}
 

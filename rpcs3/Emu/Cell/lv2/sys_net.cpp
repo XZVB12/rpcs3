@@ -27,6 +27,7 @@
 
 #include <limits>
 #include <chrono>
+#include <shared_mutex>
 
 LOG_CHANNEL(sys_net);
 LOG_CHANNEL(sys_net_dump);
@@ -200,21 +201,56 @@ static sys_net_error get_last_error(bool is_blocking, int native_error = 0)
 	}
 
 #ifdef _WIN32
-	switch (native_error)
 #define ERROR_CASE(error) case WSA ## error: result = SYS_NET_ ## error; name = #error; break;
 #else
-	switch (native_error)
 #define ERROR_CASE(error) case error: result = SYS_NET_ ## error; name = #error; break;
 #endif
+	switch (native_error)
 	{
+#ifndef _WIN32
+		ERROR_CASE(ENOENT);
+		ERROR_CASE(ENOMEM);
+		ERROR_CASE(EBUSY);
+		ERROR_CASE(ENOSPC);
+#endif
+
+		// TODO: We don't currently support EFAULT or EINTR
+		//ERROR_CASE(EFAULT);
+		//ERROR_CASE(EINTR);
+
+		ERROR_CASE(EBADF);
+		ERROR_CASE(EACCES);
+		ERROR_CASE(EINVAL);
+		ERROR_CASE(EMFILE);
+		ERROR_CASE(EPIPE);
 		ERROR_CASE(EWOULDBLOCK);
 		ERROR_CASE(EINPROGRESS);
 		ERROR_CASE(EALREADY);
-		ERROR_CASE(ENOTCONN);
-		ERROR_CASE(ECONNRESET);
+		ERROR_CASE(EDESTADDRREQ);
+		ERROR_CASE(EMSGSIZE);
+		ERROR_CASE(EPROTOTYPE);
+		ERROR_CASE(ENOPROTOOPT);
+		ERROR_CASE(EPROTONOSUPPORT);
+		ERROR_CASE(EOPNOTSUPP);
+		ERROR_CASE(EPFNOSUPPORT);
+		ERROR_CASE(EAFNOSUPPORT);
 		ERROR_CASE(EADDRINUSE);
+		ERROR_CASE(EADDRNOTAVAIL);
+		ERROR_CASE(ENETDOWN);
+		ERROR_CASE(ENETUNREACH);
+		ERROR_CASE(ECONNABORTED);
+		ERROR_CASE(ECONNRESET);
+		ERROR_CASE(ENOBUFS);
 		ERROR_CASE(EISCONN);
-	default: sys_net.error("Unknown/illegal socket error: %d", native_error);
+		ERROR_CASE(ENOTCONN);
+		ERROR_CASE(ESHUTDOWN);
+		ERROR_CASE(ETOOMANYREFS);
+		ERROR_CASE(ETIMEDOUT);
+		ERROR_CASE(ECONNREFUSED);
+		ERROR_CASE(EHOSTDOWN);
+		ERROR_CASE(EHOSTUNREACH);
+	default:
+		fmt::throw_exception("sys_net get_last_error(is_blocking=%d, native_error=%d): Unknown/illegal socket error", is_blocking, native_error);
 	}
 
 	if (name && result != SYS_NET_EWOULDBLOCK && result != SYS_NET_EINPROGRESS)
@@ -510,7 +546,7 @@ struct nt_p2p_port
 		memcpy(packet_data+sizeof(u16), &header, sizeof(lv2_socket::p2ps_i::encapsulated_tcp));
 		if(datasize)
 			memcpy(packet_data+sizeof(u16)+sizeof(lv2_socket::p2ps_i::encapsulated_tcp), data, datasize);
-		
+
 		auto* hdr_ptr = reinterpret_cast<lv2_socket::p2ps_i::encapsulated_tcp *>(packet_data+sizeof(u16));
 		hdr_ptr->checksum = 0;
 		hdr_ptr->checksum = tcp_checksum(reinterpret_cast<u16 *>(hdr_ptr), sizeof(lv2_socket::p2ps_i::encapsulated_tcp) + datasize);
@@ -550,7 +586,7 @@ struct nt_p2p_port
 
 			if (sock.p2ps.status != lv2_socket::p2ps_i::stream_status::stream_connected && sock.p2ps.status != lv2_socket::p2ps_i::stream_status::stream_handshaking)
 				return false;
-			
+
 			dump_packet(tcp_header);
 
 			if (tcp_header->flags == lv2_socket::p2ps_i::ACK)
@@ -660,7 +696,7 @@ struct nt_p2p_port
 
 		if (!sock || !sock.ret)
 			return false;
-		
+
 		return true;
 	}
 
@@ -847,7 +883,7 @@ struct nt_p2p_port
 		}
 
 		auto* tcp_header = reinterpret_cast<lv2_socket::p2ps_i::encapsulated_tcp*>(sp_data);
-		
+
 		// Validate signature & length
 		if (tcp_header->signature != lv2_socket::p2ps_i::U2S_sig)
 		{
@@ -911,7 +947,7 @@ struct network_thread
 	shared_mutex s_nw_mutex;
 
 	shared_mutex list_p2p_ports_mutex;
-	std::map<u16, nt_p2p_port> list_p2p_ports{};	
+	std::map<u16, nt_p2p_port> list_p2p_ports{};
 
 	static constexpr auto thread_name = "Network Thread";
 
@@ -2269,6 +2305,23 @@ error_code sys_net_bnet_recvfrom(ppu_thread& ppu, s32 s, vm::ptr<void> buf, u32 
 
 				return true;
 			}
+#ifdef _WIN32
+			else
+			{
+				// Windows returns an error when trying to peek at a message and buffer not long enough to contain the whole message, should be ignored
+				if ((native_flags & MSG_PEEK) && get_native_error() == WSAEMSGSIZE)
+				{
+					native_result = len;
+					return true;
+				}
+				// Windows will return WSASHUTDOWN when the connection is shutdown, POSIX just returns EOF (0) in this situation.
+				if( get_native_error() == WSAESHUTDOWN)
+				{
+					native_result = 0;
+					return true;
+				}
+			}
+#endif
 
 			result = get_last_error(!sock.so_nbio && (flags & SYS_NET_MSG_DONTWAIT) == 0);
 
@@ -2510,7 +2563,7 @@ error_code sys_net_bnet_sendto(ppu_thread& ppu, s32 s, vm::cptr<void> buf, u32 l
 				cur_total_len -= cur_data_len;
 				sock.p2ps.cur_seq += cur_data_len;
 			}
-	
+
 			native_result = len;
 			return true;
 		}
@@ -2659,7 +2712,7 @@ error_code sys_net_bnet_setsockopt(ppu_thread& ppu, s32 s, s32 level, s32 optnam
 		if (sock.type == SYS_NET_SOCK_DGRAM_P2P || sock.type == SYS_NET_SOCK_STREAM_P2P)
 		{
 			return {};
-		}		
+		}
 
 		if (optlen >= sizeof(s32))
 		{
@@ -2754,7 +2807,7 @@ error_code sys_net_bnet_setsockopt(ppu_thread& ppu, s32 s, s32 level, s32 optnam
 #else
 				native_timeo.tv_sec = ::narrow<int>(reinterpret_cast<sys_net_timeval*>(optval_buf.data())->tv_sec);
 				native_timeo.tv_usec = ::narrow<int>(reinterpret_cast<sys_net_timeval*>(optval_buf.data())->tv_usec);
-#endif 
+#endif
 				break;
 			}
 			case SYS_NET_SO_LINGER:
@@ -2939,6 +2992,12 @@ error_code sys_net_bnet_socket(ppu_thread& ppu, s32 family, s32 type, s32 protoc
 		{
 			return -get_last_error(false);
 		}
+		u32 default_RCVBUF = (type==SYS_NET_SOCK_STREAM) ? 65535 : 9216;
+		if (setsockopt(native_socket, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&default_RCVBUF), sizeof(default_RCVBUF)) != 0)
+			sys_net.error("Error setting defalult SO_RCVBUF on sys_net_bnet_socket socket");
+		u32 default_SNDBUF = 131072;
+		if (setsockopt(native_socket, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<const char*>(&default_SNDBUF), sizeof(default_SNDBUF)) != 0)
+			sys_net.error("Error setting default SO_SNDBUF on sys_net_bnet_socket socket");
 	}
 
 	auto sock_lv2 = std::make_shared<lv2_socket>(native_socket, type, family);
@@ -3076,7 +3135,7 @@ error_code sys_net_bnet_poll(ppu_thread& ppu, vm::ptr<sys_net_pollfd> fds, s32 n
 							signaled++;
 					}
 				}
-				else 
+				else
 				{
 					// Check for fake packet for dns interceptions
 					const auto nph = g_fxo->get<named_thread<np_handler>>();

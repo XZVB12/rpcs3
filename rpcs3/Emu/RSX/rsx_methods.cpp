@@ -1,7 +1,6 @@
 ﻿#include "stdafx.h"
 #include "rsx_methods.h"
 #include "RSXThread.h"
-#include "Emu/Memory/vm_reservation.h"
 #include "rsx_utils.h"
 #include "rsx_decode.h"
 #include "Emu/Cell/PPUCallback.h"
@@ -146,34 +145,13 @@ namespace rsx
 
 			const u32 addr = get_address(offset, ctxt, HERE);
 
-			atomic_t<u64>* res{};
-			bool upd = false;
-
 			// TODO: Check if possible to write on reservations
 			if (rsx->label_addr >> 28 != addr >> 28)
 			{
-				if (g_use_rtm)
-				{
-					upd = true;
-				}
-				else
-				{
-					res = &vm::reservation_lock(addr).first;
-				}
+				rsx_log.fatal("NV406E semaphore unexpected address. Please report to the developers. (offset=0x%x, addr=0x%x)", offset, addr);
 			}
 
 			vm::_ref<RsxSemaphore>(addr).val = arg;
-
-			if (res)
-			{
-				res->fetch_add(64);
-				res->notify_all();
-			}
-			else if (upd)
-			{
-				// TODO: simply writing semaphore from RSX thread is wrong on TSX path
-				vm::reservation_update(addr);
-			}
 		}
 	}
 
@@ -446,11 +424,15 @@ namespace rsx
 				const u32 load = rsx::method_registers.transform_constant_load();
 
 				u32 rcount = count;
-				if (const u32 max = (load + reg) * 4 + count + subreg; max > 468 * 4)
+				if (const u32 max = (load + reg) * 4 + count + subreg, limit = 468 * 4; max > limit)
 				{
 					// Ignore addresses outside the usable [0, 467] range
 					rsx_log.warning("Invalid transform register index (load=%u, index=%u, count=%u)", load, index, count);
-					rcount -= max - (468 * 4);
+
+					if ((max - count) < limit)
+						rcount -= max - limit;
+					else
+						rcount = 0;
 				}
 
 				const auto values = &rsx::method_registers.transform_constants[load + reg][subreg];
@@ -1535,7 +1517,7 @@ namespace rsx
 			const auto write_length = out_pitch * (line_count - 1) + line_length;
 
 			rsx->invalidate_fragment_program(dst_dma, dst_offset, write_length);
-	
+
 			if (const auto result = rsx->read_barrier(read_address, read_length, !is_block_transfer);
 				result == rsx::result_zcull_intr)
 			{

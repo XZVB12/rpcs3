@@ -5,12 +5,11 @@
 #include "util/logs.hpp"
 #include "mutex.h"
 #include "sysinfo.h"
-#include "VirtualMemory.h"
+#include "util/vm.hpp"
 #include <immintrin.h>
 #include <zlib.h>
 
 #ifdef __linux__
-#include <sys/mman.h>
 #define CAN_OVERCOMMIT
 #endif
 
@@ -22,11 +21,8 @@ static u8* get_jit_memory()
 	static void* const s_memory2 = []() -> void*
 	{
 		void* ptr = utils::memory_reserve(0x80000000);
-
-#ifdef CAN_OVERCOMMIT
 		utils::memory_commit(ptr, 0x80000000);
 		utils::memory_protect(ptr, 0x40000000, utils::protection::wx);
-#endif
 		return ptr;
 	}();
 
@@ -88,9 +84,7 @@ static u8* add_jit_memory(std::size_t size, uint align)
 
 	if (olda != newa) [[unlikely]]
 	{
-#ifdef CAN_OVERCOMMIT
-		madvise(pointer + olda, newa - olda, MADV_WILLNEED);
-#else
+#ifndef CAN_OVERCOMMIT
 		// Commit more memory
 		utils::memory_commit(pointer + olda, newa - olda, Prot);
 #endif
@@ -266,29 +260,6 @@ asmjit::Runtime& asmjit::get_global_runtime()
 	return g_rt;
 }
 
-asmjit::Label asmjit::build_transaction_enter(asmjit::X86Assembler& c, asmjit::Label fallback, const asmjit::X86Gp& ctr, uint less_than)
-{
-	Label fall = c.newLabel();
-	Label begin = c.newLabel();
-	c.jmp(begin);
-	c.bind(fall);
-	c.add(ctr, 1);
-
-	// Don't repeat on zero status (may indicate syscall or interrupt)
-	c.test(x86::eax, x86::eax);
-	c.jz(fallback);
-
-	// Other bad statuses are ignored regardless of repeat flag (TODO)
-	c.cmp(ctr, less_than);
-	c.jae(fallback);
-	c.align(kAlignCode, 16);
-	c.bind(begin);
-	return fall;
-
-	// xbegin should be issued manually, allows to add more check before entering transaction
-	//c.xbegin(fall);
-}
-
 #ifdef LLVM_AVAILABLE
 
 #include <unordered_map>
@@ -308,6 +279,7 @@ asmjit::Label asmjit::build_transaction_enter(asmjit::X86Assembler& c, asmjit::L
 #endif
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/FormattedStream.h"
+#include "llvm/Support/Host.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/ExecutionEngine/RTDyldMemoryManager.h"
 #include "llvm/ExecutionEngine/ObjectCache.h"

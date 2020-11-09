@@ -39,6 +39,7 @@ target_sources(rpcs3_emu PRIVATE
 	../util/logs.cpp
 	../util/yaml.cpp
 	../util/cereal.cpp
+	../util/vm_native.cpp
 	../../Utilities/bin_patch.cpp
 	../../Utilities/cheat_info.cpp
 	../../Utilities/cond.cpp
@@ -54,7 +55,6 @@ target_sources(rpcs3_emu PRIVATE
 	../../Utilities/sysinfo.cpp
 	../../Utilities/Thread.cpp
 	../../Utilities/version.cpp
-	../../Utilities/VirtualMemory.cpp
 )
 
 target_include_directories(rpcs3_emu PUBLIC "${CMAKE_SOURCE_DIR}")
@@ -339,10 +339,6 @@ target_link_libraries(rpcs3_emu
 	PRIVATE
 		3rdparty::stblib 3rdparty::libpng)
 
-if(CMAKE_COMPILER_IS_GNUCXX)
-	target_link_libraries(rpcs3_emu PUBLIC -latomic)
-endif()
-
 
 # CPU
 target_sources(rpcs3_emu PRIVATE
@@ -356,6 +352,7 @@ target_link_libraries(rpcs3_emu
 
 # Io
 target_sources(rpcs3_emu PRIVATE
+	Io/interception.cpp
 	Io/KeyboardHandler.cpp
 	Io/pad_config.cpp
 	Io/pad_config_types.cpp

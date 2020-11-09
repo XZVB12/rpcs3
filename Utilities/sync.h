@@ -7,6 +7,7 @@
 #include "dynamic_library.h"
 
 #ifdef _WIN32
+#define NOMINMAX
 #include <Windows.h>
 #include <time.h>
 #elif __linux__
@@ -15,6 +16,7 @@
 #include <linux/futex.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <fcntl.h>
 #endif
 #include <algorithm>
 #include <ctime>
