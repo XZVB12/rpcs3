@@ -1,4 +1,4 @@
-﻿#include "stdafx.h"
+#include "stdafx.h"
 #include "Emu/System.h"
 #include "Emu/Memory/vm_ptr.h"
 #include "Emu/Memory/vm_locking.h"
@@ -1115,9 +1115,15 @@ DECLARE(lv2_obj::g_waiting);
 
 thread_local DECLARE(lv2_obj::g_to_awake);
 
+namespace cpu_counter
+{
+	void remove(cpu_thread*) noexcept;
+}
+
 void lv2_obj::sleep(cpu_thread& cpu, const u64 timeout)
 {
 	vm::temporary_unlock(cpu);
+	cpu_counter::remove(&cpu);
 	std::lock_guard{g_mutex}, sleep_unlocked(cpu, timeout);
 	g_to_awake.clear();
 }
@@ -1220,7 +1226,7 @@ bool lv2_obj::awake_unlocked(cpu_thread* cpu, s32 prio)
 	case yield_cmd:
 	{
 		// Yield command
-		for (std::size_t i = 0;; i++)
+		for (usz i = 0;; i++)
 		{
 			if (i + 1 >= g_ppu.size())
 			{
@@ -1229,7 +1235,7 @@ bool lv2_obj::awake_unlocked(cpu_thread* cpu, s32 prio)
 
 			if (const auto ppu = g_ppu[i]; ppu == cpu)
 			{
-				std::size_t j = i + 1;
+				usz j = i + 1;
 
 				for (; j < g_ppu.size(); j++)
 				{
@@ -1319,7 +1325,7 @@ bool lv2_obj::awake_unlocked(cpu_thread* cpu, s32 prio)
 	}
 
 	// Suspend threads if necessary
-	for (std::size_t i = g_cfg.core.ppu_threads; changed_queue && i < g_ppu.size(); i++)
+	for (usz i = g_cfg.core.ppu_threads; changed_queue && i < g_ppu.size(); i++)
 	{
 		const auto target = g_ppu[i];
 
@@ -1346,7 +1352,7 @@ void lv2_obj::schedule_all()
 	if (g_pending.empty())
 	{
 		// Wake up threads
-		for (std::size_t i = 0, x = std::min<std::size_t>(g_cfg.core.ppu_threads, g_ppu.size()); i < x; i++)
+		for (usz i = 0, x = std::min<usz>(g_cfg.core.ppu_threads, g_ppu.size()); i < x; i++)
 		{
 			const auto target = g_ppu[i];
 

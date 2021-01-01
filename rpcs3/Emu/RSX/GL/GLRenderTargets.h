@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "../Common/surface_store.h"
 #include "GLHelpers.h"
 #include "../rsx_utils.h"
@@ -108,7 +108,8 @@ namespace gl
 		bool matches_dimensions(u16 _width, u16 _height) const
 		{
 			//Use forward scaling to account for rounding and clamping errors
-			return (rsx::apply_resolution_scale(_width, true) == width()) && (rsx::apply_resolution_scale(_height, true) == height());
+			const auto [scaled_w, scaled_h] = rsx::apply_resolution_scale<true>(_width, _height);
+			return (scaled_w == width()) && (scaled_h == height());
 		}
 
 		void memory_barrier(gl::command_context& cmd, rsx::surface_access access);
@@ -123,7 +124,7 @@ namespace gl
 
 	static inline gl::render_target* as_rtt(gl::texture* t)
 	{
-		return verify(HERE, dynamic_cast<gl::render_target*>(t));
+		return ensure(dynamic_cast<gl::render_target*>(t));
 	}
 }
 
@@ -139,15 +140,15 @@ struct gl_render_target_traits
 	std::unique_ptr<gl::render_target> create_new_surface(
 		u32 address,
 		rsx::surface_color_format surface_color_format,
-		size_t width, size_t height, size_t pitch,
+		usz width, usz height, usz pitch,
 		rsx::surface_antialiasing antialias
 	)
 	{
 		auto format = rsx::internals::surface_color_format_to_gl(surface_color_format);
+		const auto [width_, height_] = rsx::apply_resolution_scale<true>(static_cast<u16>(width), static_cast<u16>(height));
 
-		std::unique_ptr<gl::render_target> result(new gl::render_target(rsx::apply_resolution_scale(static_cast<u16>(width), true),
-			rsx::apply_resolution_scale(static_cast<u16>(height), true), static_cast<GLenum>(format.internal_format),
-			RSX_FORMAT_CLASS_COLOR));
+		std::unique_ptr<gl::render_target> result(new gl::render_target(width_, height_,
+			static_cast<GLenum>(format.internal_format), RSX_FORMAT_CLASS_COLOR));
 
 		result->set_aa_mode(antialias);
 		result->set_native_pitch(static_cast<u16>(width) * get_format_block_size_in_bytes(surface_color_format) * result->samples_x);
@@ -168,14 +169,15 @@ struct gl_render_target_traits
 	std::unique_ptr<gl::render_target> create_new_surface(
 			u32 address,
 			rsx::surface_depth_format2 surface_depth_format,
-			size_t width, size_t height, size_t pitch,
+			usz width, usz height, usz pitch,
 			rsx::surface_antialiasing antialias
 		)
 	{
 		auto format = rsx::internals::surface_depth_format_to_gl(surface_depth_format);
-		std::unique_ptr<gl::render_target> result(new gl::render_target(rsx::apply_resolution_scale(static_cast<u16>(width), true),
-			rsx::apply_resolution_scale(static_cast<u16>(height), true), static_cast<GLenum>(format.internal_format),
-			rsx::classify_format(surface_depth_format)));
+		const auto [width_, height_] = rsx::apply_resolution_scale<true>(static_cast<u16>(width), static_cast<u16>(height));
+
+		std::unique_ptr<gl::render_target> result(new gl::render_target(width_, height_,
+			static_cast<GLenum>(format.internal_format), rsx::classify_format(surface_depth_format)));
 
 		result->set_aa_mode(antialias);
 		result->set_surface_dimensions(static_cast<u16>(width), static_cast<u16>(height), static_cast<u16>(pitch));
@@ -201,8 +203,8 @@ struct gl_render_target_traits
 		if (!sink)
 		{
 			auto internal_format = static_cast<GLenum>(ref->get_internal_format());
-			const auto new_w = rsx::apply_resolution_scale(prev.width, true, ref->get_surface_width(rsx::surface_metrics::pixels));
-			const auto new_h = rsx::apply_resolution_scale(prev.height, true, ref->get_surface_height(rsx::surface_metrics::pixels));
+			const auto [new_w, new_h] = rsx::apply_resolution_scale<true>(prev.width, prev.height,
+				ref->get_surface_width(rsx::surface_metrics::pixels), ref->get_surface_height(rsx::surface_metrics::pixels));
 
 			sink = std::make_unique<gl::render_target>(new_w, new_h, internal_format, ref->format_class());
 			sink->add_ref();
@@ -260,13 +262,13 @@ struct gl_render_target_traits
 	{}
 
 	static
-	bool surface_is_pitch_compatible(const std::unique_ptr<gl::render_target> &surface, size_t pitch)
+	bool surface_is_pitch_compatible(const std::unique_ptr<gl::render_target> &surface, usz pitch)
 	{
 		return surface->get_rsx_pitch() == pitch;
 	}
 
 	static
-	void invalidate_surface_contents(gl::command_context&, gl::render_target *surface, u32 address, size_t pitch)
+	void invalidate_surface_contents(gl::command_context&, gl::render_target *surface, u32 address, usz pitch)
 	{
 		surface->set_rsx_pitch(static_cast<u16>(pitch));
 		surface->queue_tag(address);
@@ -303,7 +305,7 @@ struct gl_render_target_traits
 	bool int_surface_matches_properties(
 		const std::unique_ptr<gl::render_target> &surface,
 		gl::texture::internal_format format,
-		size_t width, size_t height,
+		usz width, usz height,
 		rsx::surface_antialiasing antialias,
 		bool check_refs = false)
 	{
@@ -319,7 +321,7 @@ struct gl_render_target_traits
 	bool surface_matches_properties(
 		const std::unique_ptr<gl::render_target> &surface,
 		rsx::surface_color_format format,
-		size_t width, size_t height,
+		usz width, usz height,
 		rsx::surface_antialiasing antialias,
 		bool check_refs=false)
 	{
@@ -331,7 +333,7 @@ struct gl_render_target_traits
 	bool surface_matches_properties(
 		const std::unique_ptr<gl::render_target> &surface,
 		rsx::surface_depth_format2 format,
-		size_t width, size_t height,
+		usz width, usz height,
 		rsx::surface_antialiasing antialias,
 		bool check_refs = false)
 	{

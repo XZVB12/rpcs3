@@ -206,6 +206,9 @@
     <ClCompile Include="Emu\RSX\Common\BufferUtils.cpp">
       <Filter>Emu\GPU\RSX\Common</Filter>
     </ClCompile>
+    <ClCompile Include="Emu\RSX\Common\GLSLCommon.cpp">
+      <Filter>Emu\GPU\RSX\Common</Filter>
+    </ClCompile>
     <ClCompile Include="Emu\RSX\Null\NullGSRender.cpp">
       <Filter>Emu\GPU\RSX\Null</Filter>
     </ClCompile>
@@ -734,7 +737,7 @@
     <ClCompile Include="Emu\IdManager.cpp">
       <Filter>Emu</Filter>
     </ClCompile>
-    <ClCompile Include="..\Utilities\dynamic_library.cpp">
+    <ClCompile Include="util\dyn_lib.cpp">
       <Filter>Utilities</Filter>
     </ClCompile>
     <ClCompile Include="..\Utilities\version.cpp">
@@ -782,7 +785,7 @@
     <ClCompile Include="Emu\Cell\lv2\sys_ss.cpp">
       <Filter>Emu\Cell\lv2</Filter>
     </ClCompile>
-    <ClCompile Include="..\Utilities\sysinfo.cpp">
+    <ClCompile Include="util\sysinfo.cpp">
       <Filter>Utilities</Filter>
     </ClCompile>
     <ClCompile Include="Emu\Cell\lv2\sys_gamepad.cpp">
@@ -878,9 +881,6 @@
     <ClCompile Include="util\cereal.cpp">
       <Filter>Utilities</Filter>
     </ClCompile>
-    <ClCompile Include="util\shared_cptr.cpp">
-      <Filter>Utilities</Filter>
-    </ClCompile>
     <ClCompile Include="util\fixed_typemap.cpp">
       <Filter>Utilities</Filter>
     </ClCompile>
@@ -894,6 +894,9 @@
       <Filter>Emu\GPU\RSX\Overlays\Shaders</Filter>
     </ClCompile>
     <ClCompile Include="Emu\Io\GHLtar.cpp">
+      <Filter>Emu\Io</Filter>
+    </ClCompile>
+    <ClCompile Include="Emu\Io\Buzz.cpp">
       <Filter>Emu\Io</Filter>
     </ClCompile>
     <ClCompile Include="Emu\Cell\lv2\sys_crypto_engine.cpp">
@@ -926,6 +929,9 @@
     <ClCompile Include="Emu\NP\fb_helpers.cpp">
       <Filter>Emu\NP</Filter>
     </ClCompile>
+    <ClCompile Include="Emu\NP\np_contexts.cpp">
+      <Filter>Emu\NP</Filter>
+    </ClCompile>
     <ClCompile Include="Emu\NP\np_handler.cpp">
       <Filter>Emu\NP</Filter>
     </ClCompile>
@@ -935,13 +941,7 @@
     <ClCompile Include="Emu\RSX\Overlays\overlay_osk_panel.cpp">
       <Filter>Emu\GPU\RSX\Overlays</Filter>
     </ClCompile>
-    <ClCompile Include="util\atomic2.cpp">
-      <Filter>Utilities</Filter>
-    </ClCompile>
     <ClCompile Include="util\logs.cpp">
-      <Filter>Utilities</Filter>
-    </ClCompile>
-    <ClCompile Include="util\shared_cptr.cpp">
       <Filter>Utilities</Filter>
     </ClCompile>
     <ClCompile Include="Emu\Audio\FAudio\FAudioBackend.cpp">
@@ -1072,7 +1072,13 @@
     <ClInclude Include="stdafx.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\Utilities\BEType.h">
+    <ClInclude Include="util\v128.hpp">
+      <Filter>Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="util\v128sse.hpp">
+      <Filter>Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="util\to_endian.hpp">
       <Filter>Utilities</Filter>
     </ClInclude>
     <ClInclude Include="..\Utilities\StrFmt.h">
@@ -1135,12 +1141,6 @@
     <ClInclude Include="Emu\Memory\vm_var.h">
       <Filter>Emu\Memory</Filter>
     </ClInclude>
-    <ClInclude Include="restore_new.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="define_new_memleakdetect.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="Crypto\ec.h">
       <Filter>Crypto</Filter>
     </ClInclude>
@@ -1151,6 +1151,9 @@
       <Filter>Utilities</Filter>
     </ClInclude>
     <ClInclude Include="Emu\RSX\Common\ProgramStateCache.h">
+      <Filter>Emu\GPU\RSX\Common</Filter>
+    </ClInclude>
+    <ClInclude Include="Emu\RSX\Common\program_state_cache2.hpp">
       <Filter>Emu\GPU\RSX\Common</Filter>
     </ClInclude>
     <ClInclude Include="Emu\RSX\Common\FragmentProgramDecompiler.h">
@@ -1186,7 +1189,7 @@
     <ClInclude Include="Emu\RSX\Common\BufferUtils.h">
       <Filter>Emu\GPU\RSX\Common</Filter>
     </ClInclude>
-    <ClInclude Include="..\Utilities\types.h">
+    <ClInclude Include="util\types.hpp">
       <Filter>Utilities</Filter>
     </ClInclude>
     <ClInclude Include="..\Utilities\BitField.h">
@@ -1561,7 +1564,7 @@
     <ClInclude Include="Emu\RSX\rsx_cache.h">
       <Filter>Emu\GPU\RSX</Filter>
     </ClInclude>
-    <ClInclude Include="..\Utilities\dynamic_library.h">
+    <ClInclude Include="util\dyn_lib.hpp">
       <Filter>Utilities</Filter>
     </ClInclude>
     <ClInclude Include="..\Utilities\version.h">
@@ -1624,7 +1627,7 @@
     <ClInclude Include="..\Utilities\CRC.h">
       <Filter>Utilities</Filter>
     </ClInclude>
-    <ClInclude Include="..\Utilities\sysinfo.h">
+    <ClInclude Include="util\sysinfo.hpp">
       <Filter>Utilities</Filter>
     </ClInclude>
     <ClInclude Include="Emu\RSX\Common\GLSLCommon.h">
@@ -1807,6 +1810,9 @@
     <ClInclude Include="Emu\Io\GHLtar.h">
       <Filter>Emu\Io</Filter>
     </ClInclude>
+    <ClInclude Include="Emu\Io\Buzz.h">
+      <Filter>Emu\Io</Filter>
+    </ClInclude>
     <ClInclude Include="Emu\NP\np_handler.h">
       <Filter>Emu\NP</Filter>
     </ClInclude>
@@ -1819,22 +1825,28 @@
     <ClInclude Include="util\yaml.hpp">
       <Filter>Utilities</Filter>
     </ClInclude>
-    <ClInclude Include="util\atomic2.hpp">
-      <Filter>Utilities</Filter>
-    </ClInclude>
     <ClInclude Include="util\endian.hpp">
       <Filter>Utilities</Filter>
     </ClInclude>
     <ClInclude Include="util\fixed_typemap.hpp">
       <Filter>Utilities</Filter>
     </ClInclude>
+    <ClInclude Include="util\auto_typemap.hpp">
+      <Filter>Utilities</Filter>
+    </ClInclude>
     <ClInclude Include="util\init_mutex.hpp">
+      <Filter>Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="util\slow_mutex.hpp">
+      <Filter>Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="util\fifo_mutex.hpp">
       <Filter>Utilities</Filter>
     </ClInclude>
     <ClInclude Include="util\logs.hpp">
       <Filter>Utilities</Filter>
     </ClInclude>
-    <ClInclude Include="util\shared_cptr.hpp">
+    <ClInclude Include="util\shared_ptr.hpp">
       <Filter>Utilities</Filter>
     </ClInclude>
     <ClInclude Include="util\typeindices.hpp">

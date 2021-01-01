@@ -1,4 +1,4 @@
-﻿#include "stdafx.h"
+#include "stdafx.h"
 #include "Emu/system_config.h"
 
 #include "sys_tty.h"
@@ -32,7 +32,7 @@ error_code sys_tty_read(s32 ch, vm::ptr<char> buf, u32 len, vm::ptr<u32> preadle
 		sys_tty.warning("sys_tty_read called with system channel %d", ch);
 	}
 
-	size_t chars_to_read = 0; // number of chars that will be read from the input string
+	usz chars_to_read = 0; // number of chars that will be read from the input string
 	std::string tty_read;     // string for storage of read chars
 
 	if (len > 0)
@@ -45,15 +45,15 @@ error_code sys_tty_read(s32 ch, vm::ptr<char> buf, u32 len, vm::ptr<u32> preadle
 			std::string& input = g_tty_input[ch].front();
 
 			// we have to stop reading at either a new line, the param len, or our input string size
-			size_t new_line_pos = input.find_first_of('\n');
+			usz new_line_pos = input.find_first_of('\n');
 
 			if (new_line_pos != input.npos)
 			{
-				chars_to_read = std::min(new_line_pos, static_cast<size_t>(len));
+				chars_to_read = std::min(new_line_pos, static_cast<usz>(len));
 			}
 			else
 			{
-				chars_to_read = std::min(input.size(), static_cast<size_t>(len));
+				chars_to_read = std::min(input.size(), static_cast<usz>(len));
 			}
 
 			// read the previously calculated number of chars from the beginning of the input string
@@ -92,7 +92,7 @@ error_code sys_tty_write(s32 ch, vm::cptr<char> buf, u32 len, vm::ptr<u32> pwrit
 
 	std::string msg;
 
-	if (static_cast<s32>(len) > 0 && vm::check_addr(buf.addr(), len))
+	if (static_cast<s32>(len) > 0 && vm::check_addr(buf.addr(), vm::page_readable, len))
 	{
 		msg.resize(len);
 

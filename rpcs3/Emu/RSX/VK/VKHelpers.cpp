@@ -1,4 +1,4 @@
-﻿#include "stdafx.h"
+#include "stdafx.h"
 #include "VKHelpers.h"
 #include "VKGSRender.h"
 #include "VKCompute.h"
@@ -10,58 +10,14 @@
 #include "VKCommandStream.h"
 #include "VKRenderPass.h"
 
+#include "Emu/RSX/rsx_methods.h"
 #include "Utilities/mutex.h"
 #include "Utilities/lockless.h"
+#include <unordered_map>
 
 namespace vk
 {
-	static chip_family_table s_AMD_family_tree = []()
-	{
-		chip_family_table table;
-		table.default_ = chip_class::AMD_gcn_generic;
-
-		// AMD cards. See https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
-		table.add(0x67C0, 0x67FF, chip_class::AMD_polaris);
-		table.add(0x6FDF, chip_class::AMD_polaris); // RX580 2048SP
-		table.add(0x6980, 0x699F, chip_class::AMD_polaris); // Polaris12
-		table.add(0x694C, 0x694F, chip_class::AMD_vega); // VegaM
-		table.add(0x6860, 0x686F, chip_class::AMD_vega); // VegaPro
-		table.add(0x687F, chip_class::AMD_vega); // Vega56/64
-		table.add(0x69A0, 0x69AF, chip_class::AMD_vega); // Vega12
-		table.add(0x66A0, 0x66AF, chip_class::AMD_vega); // Vega20
-		table.add(0x15DD, chip_class::AMD_vega); // Raven Ridge
-		table.add(0x15D8, chip_class::AMD_vega); // Raven Ridge
-		table.add(0x7310, 0x731F, chip_class::AMD_navi); // Navi10
-		table.add(0x7340, 0x734F, chip_class::AMD_navi); // Navi14
-
-		return table;
-	}();
-
-	static chip_family_table s_NV_family_tree = []()
-	{
-		chip_family_table table;
-		table.default_ = chip_class::NV_generic;
-
-		// NV cards. See https://envytools.readthedocs.io/en/latest/hw/pciid.html
-		// NOTE: Since NV device IDs are linearly incremented per generation, there is no need to carefully check all the ranges
-		table.add(0x1180, 0x11fa, chip_class::NV_kepler); // GK104, 106
-		table.add(0x0FC0, 0x0FFF, chip_class::NV_kepler); // GK107
-		table.add(0x1003, 0x1028, chip_class::NV_kepler); // GK110
-		table.add(0x1280, 0x12BA, chip_class::NV_kepler); // GK208
-		table.add(0x1381, 0x13B0, chip_class::NV_maxwell); // GM107
-		table.add(0x1340, 0x134D, chip_class::NV_maxwell); // GM108
-		table.add(0x13C0, 0x13D9, chip_class::NV_maxwell); // GM204
-		table.add(0x1401, 0x1427, chip_class::NV_maxwell); // GM206
-		table.add(0x15F7, 0x15F9, chip_class::NV_pascal); // GP100 (Tesla P100)
-		table.add(0x1B00, 0x1D80, chip_class::NV_pascal);
-		table.add(0x1D81, 0x1DBA, chip_class::NV_volta);
-		table.add(0x1E02, 0x1F54, chip_class::NV_turing); // TU102, TU104, TU106, TU106M, TU106GL (RTX 20 series)
-		table.add(0x1F82, 0x1FB9, chip_class::NV_turing); // TU117, TU117M, TU117GL
-		table.add(0x2182, 0x21D1, chip_class::NV_turing); // TU116, TU116M, TU116GL
-		table.add(0x20B0, 0x20BE, chip_class::NV_ampere); // GA100
-
-		return table;
-	}();
+	extern chip_class g_chip_class;
 
 	const context* g_current_vulkan_ctx = nullptr;
 	const render_device* g_current_renderer;
@@ -83,7 +39,6 @@ namespace vk
 	// Driver compatibility workarounds
 	VkFlags g_heap_compatible_buffer_types = 0;
 	driver_vendor g_driver_vendor = driver_vendor::unknown;
-	chip_class g_chip_class = chip_class::unknown;
 	bool g_drv_no_primitive_restart = false;
 	bool g_drv_sanitize_fp_values = false;
 	bool g_drv_disable_fence_reset = false;
@@ -92,7 +47,7 @@ namespace vk
 	u64 g_num_processed_frames = 0;
 	u64 g_num_total_frames = 0;
 
-	VKAPI_ATTR void* VKAPI_CALL mem_realloc(void* pUserData, void* pOriginal, size_t size, size_t alignment, VkSystemAllocationScope allocationScope)
+	VKAPI_ATTR void* VKAPI_CALL mem_realloc(void* pUserData, void* pOriginal, usz size, usz alignment, VkSystemAllocationScope allocationScope)
 	{
 #ifdef _MSC_VER
 		return _aligned_realloc(pOriginal, size, alignment);
@@ -103,7 +58,7 @@ namespace vk
 #endif
 	}
 
-	VKAPI_ATTR void* VKAPI_CALL mem_alloc(void* pUserData, size_t size, size_t alignment, VkSystemAllocationScope allocationScope)
+	VKAPI_ATTR void* VKAPI_CALL mem_alloc(void* pUserData, usz size, usz alignment, VkSystemAllocationScope allocationScope)
 	{
 #ifdef _MSC_VER
 		return _aligned_malloc(size, alignment);
@@ -125,11 +80,11 @@ namespace vk
 #endif
 	}
 
-	bool data_heap::grow(size_t size)
+	bool data_heap::grow(usz size)
 	{
 		// Create new heap. All sizes are aligned up by 64M, upto 1GiB
-		const size_t size_limit = 1024 * 0x100000;
-		const size_t aligned_new_size = align(m_size + size, 64 * 0x100000);
+		const usz size_limit = 1024 * 0x100000;
+		const usz aligned_new_size = utils::align(m_size + size, 64 * 0x100000);
 
 		if (aligned_new_size >= size_limit)
 		{
@@ -173,81 +128,6 @@ namespace vk
 		}
 
 		return true;
-	}
-
-	memory_type_mapping get_memory_mapping(const vk::physical_device& dev)
-	{
-		VkPhysicalDevice pdev = dev;
-		VkPhysicalDeviceMemoryProperties memory_properties;
-		vkGetPhysicalDeviceMemoryProperties(pdev, &memory_properties);
-
-		memory_type_mapping result;
-		result.device_local = VK_MAX_MEMORY_TYPES;
-		result.host_visible_coherent = VK_MAX_MEMORY_TYPES;
-
-		bool host_visible_cached = false;
-		VkDeviceSize  host_visible_vram_size = 0;
-		VkDeviceSize  device_local_vram_size = 0;
-
-		for (u32 i = 0; i < memory_properties.memoryTypeCount; i++)
-		{
-			VkMemoryHeap &heap = memory_properties.memoryHeaps[memory_properties.memoryTypes[i].heapIndex];
-
-			bool is_device_local = !!(memory_properties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-			if (is_device_local)
-			{
-				if (device_local_vram_size < heap.size)
-				{
-					result.device_local = i;
-					device_local_vram_size = heap.size;
-				}
-			}
-
-			bool is_host_visible = !!(memory_properties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
-			bool is_host_coherent = !!(memory_properties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-			bool is_cached = !!(memory_properties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
-
-			if (is_host_coherent && is_host_visible)
-			{
-				if ((is_cached && !host_visible_cached) ||
-					(host_visible_vram_size < heap.size))
-				{
-					result.host_visible_coherent = i;
-					host_visible_vram_size = heap.size;
-					host_visible_cached = is_cached;
-				}
-			}
-		}
-
-		if (result.device_local == VK_MAX_MEMORY_TYPES) fmt::throw_exception("GPU doesn't support device local memory" HERE);
-		if (result.host_visible_coherent == VK_MAX_MEMORY_TYPES) fmt::throw_exception("GPU doesn't support host coherent device local memory" HERE);
-		return result;
-	}
-
-	pipeline_binding_table get_pipeline_binding_table(const vk::physical_device& dev)
-	{
-		pipeline_binding_table result{};
-
-		// Need to check how many samplers are supported by the driver
-		const auto usable_samplers = std::min(dev.get_limits().maxPerStageDescriptorSampledImages, 32u);
-		result.vertex_textures_first_bind_slot = result.textures_first_bind_slot + usable_samplers;
-		result.total_descriptor_bindings = result.vertex_textures_first_bind_slot + 4;
-		return result;
-	}
-
-	chip_class get_chip_family(uint32_t vendor_id, uint32_t device_id)
-	{
-		if (vendor_id == 0x10DE)
-		{
-			return s_NV_family_tree.find(device_id);
-		}
-
-		if (vendor_id == 0x1002)
-		{
-			return s_AMD_family_tree.find(device_id);
-		}
-
-		return chip_class::unknown;
 	}
 
 	VkAllocationCallbacks default_callbacks()
@@ -348,8 +228,8 @@ namespace vk
 	{
 		auto create_texture = [&]()
 		{
-			u32 new_width = align(requested_width, 1024u);
-			u32 new_height = align(requested_height, 1024u);
+			u32 new_width = utils::align(requested_width, 1024u);
+			u32 new_height = utils::align(requested_height, 1024u);
 
 			return new vk::image(*g_current_renderer, g_current_renderer->get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 				VK_IMAGE_TYPE_2D, format, new_width, new_height, 1, 1, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
@@ -385,7 +265,7 @@ namespace vk
 		if (!g_scratch_buffer)
 		{
 			// Choose optimal size
-			const u64 alloc_size = std::max<u64>(64 * 0x100000, align(min_required_size, 0x100000));
+			const u64 alloc_size = std::max<u64>(64 * 0x100000, utils::align(min_required_size, 0x100000));
 
 			g_scratch_buffer = std::make_unique<vk::buffer>(*g_current_renderer, alloc_size,
 				g_current_renderer->get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -463,12 +343,6 @@ namespace vk
 			p.second->destroy();
 		}
 		g_overlay_passes.clear();
-	}
-
-	vk::mem_allocator_base* get_current_mem_allocator()
-	{
-		verify (HERE, g_current_renderer);
-		return g_current_renderer->get_allocator();
 	}
 
 	void set_current_thread_ctx(const vk::context &ctx)
@@ -571,11 +445,6 @@ namespace vk
 	driver_vendor get_driver_vendor()
 	{
 		return g_driver_vendor;
-	}
-
-	chip_class get_chip_family()
-	{
-		return g_chip_class;
 	}
 
 	bool emulate_primitive_restart(rsx::primitive_type type)
@@ -918,7 +787,7 @@ namespace vk
 
 	void advance_frame_counter()
 	{
-		verify(HERE), g_num_processed_frames <= g_num_total_frames;
+		ensure(g_num_processed_frames <= g_num_total_frames);
 		g_num_total_frames++;
 	}
 
@@ -962,7 +831,7 @@ namespace vk
 				case VK_NOT_READY:
 					continue;
 				default:
-					die_with_error(HERE, status);
+					die_with_error(status);
 					return status;
 				}
 			}
@@ -983,7 +852,7 @@ namespace vk
 			case VK_EVENT_RESET:
 				break;
 			default:
-				die_with_error(HERE, status);
+				die_with_error(status);
 				return status;
 			}
 
@@ -1003,144 +872,24 @@ namespace vk
 			}
 
 			//std::this_thread::yield();
+#ifdef _MSC_VER
 			_mm_pause();
+#else
+			__builtin_ia32_pause();
+#endif
 		}
 	}
 
 	void do_query_cleanup(vk::command_buffer& cmd)
 	{
 		auto renderer = dynamic_cast<VKGSRender*>(rsx::get_current_renderer());
-		verify(HERE), renderer;
+		ensure(renderer);
 
 		renderer->emergency_query_cleanup(&cmd);
 	}
 
-	void die_with_error(const char* faulting_addr, VkResult error_code)
-	{
-		std::string error_message;
-		int severity = 0; //0 - die, 1 - warn, 2 - nothing
-
-		switch (error_code)
-		{
-		case VK_SUCCESS:
-		case VK_EVENT_SET:
-		case VK_EVENT_RESET:
-		case VK_INCOMPLETE:
-			return;
-		case VK_SUBOPTIMAL_KHR:
-			error_message = "Present surface is suboptimal (VK_SUBOPTIMAL_KHR)";
-			severity = 1;
-			break;
-		case VK_NOT_READY:
-			error_message = "Device or resource busy (VK_NOT_READY)";
-			break;
-		case VK_TIMEOUT:
-			error_message = "Timeout event (VK_TIMEOUT)";
-			break;
-		case VK_ERROR_OUT_OF_HOST_MEMORY:
-			error_message = "Out of host memory (system RAM) (VK_ERROR_OUT_OF_HOST_MEMORY)";
-			break;
-		case VK_ERROR_OUT_OF_DEVICE_MEMORY:
-			error_message = "Out of video memory (VRAM) (VK_ERROR_OUT_OF_DEVICE_MEMORY)";
-			break;
-		case VK_ERROR_INITIALIZATION_FAILED:
-			error_message = "Initialization failed (VK_ERROR_INITIALIZATION_FAILED)";
-			break;
-		case VK_ERROR_DEVICE_LOST:
-			error_message = "Device lost (Driver crashed with unspecified error or stopped responding and recovered) (VK_ERROR_DEVICE_LOST)";
-			break;
-		case VK_ERROR_MEMORY_MAP_FAILED:
-			error_message = "Memory map failed (VK_ERROR_MEMORY_MAP_FAILED)";
-			break;
-		case VK_ERROR_LAYER_NOT_PRESENT:
-			error_message = "Requested layer is not available (Try disabling debug output or install vulkan SDK) (VK_ERROR_LAYER_NOT_PRESENT)";
-			break;
-		case VK_ERROR_EXTENSION_NOT_PRESENT:
-			error_message = "Requested extension not available (VK_ERROR_EXTENSION_NOT_PRESENT)";
-			break;
-		case VK_ERROR_FEATURE_NOT_PRESENT:
-			error_message = "Requested feature not available (VK_ERROR_FEATURE_NOT_PRESENT)";
-			break;
-		case VK_ERROR_INCOMPATIBLE_DRIVER:
-			error_message = "Incompatible driver (VK_ERROR_INCOMPATIBLE_DRIVER)";
-			break;
-		case VK_ERROR_TOO_MANY_OBJECTS:
-			error_message = "Too many objects created (Out of handles) (VK_ERROR_TOO_MANY_OBJECTS)";
-			break;
-		case VK_ERROR_FORMAT_NOT_SUPPORTED:
-			error_message = "Format not supported (VK_ERROR_FORMAT_NOT_SUPPORTED)";
-			break;
-		case VK_ERROR_FRAGMENTED_POOL:
-			error_message = "Fragmented pool (VK_ERROR_FRAGMENTED_POOL)";
-			break;
-		case VK_ERROR_SURFACE_LOST_KHR:
-			error_message = "Surface lost (VK_ERROR_SURFACE_LOST)";
-			break;
-		case VK_ERROR_NATIVE_WINDOW_IN_USE_KHR:
-			error_message = "Native window in use (VK_ERROR_NATIVE_WINDOW_IN_USE_KHR)";
-			break;
-		case VK_ERROR_OUT_OF_DATE_KHR:
-			error_message = "Present surface is out of date (VK_ERROR_OUT_OF_DATE_KHR)";
-			severity = 1;
-			break;
-		case VK_ERROR_INCOMPATIBLE_DISPLAY_KHR:
-			error_message = "Incompatible display (VK_ERROR_INCOMPATIBLE_DISPLAY_KHR)";
-			break;
-		case VK_ERROR_VALIDATION_FAILED_EXT:
-			error_message = "Validation failed (VK_ERROR_INCOMPATIBLE_DISPLAY_KHR)";
-			break;
-		case VK_ERROR_INVALID_SHADER_NV:
-			error_message = "Invalid shader code (VK_ERROR_INVALID_SHADER_NV)";
-			break;
-		case VK_ERROR_OUT_OF_POOL_MEMORY_KHR:
-			error_message = "Out of pool memory (VK_ERROR_OUT_OF_POOL_MEMORY_KHR)";
-			break;
-		case VK_ERROR_INVALID_EXTERNAL_HANDLE_KHR:
-			error_message = "Invalid external handle (VK_ERROR_INVALID_EXTERNAL_HANDLE_KHR)";
-			break;
-		default:
-			error_message = fmt::format("Unknown Code (%Xh, %d)%s", static_cast<s32>(error_code), static_cast<s32>(error_code), faulting_addr);
-			break;
-		}
-
-		switch (severity)
-		{
-		default:
-		case 0:
-			fmt::throw_exception("Assertion Failed! Vulkan API call failed with unrecoverable error: %s%s", error_message.c_str(), faulting_addr);
-		case 1:
-			rsx_log.error("Vulkan API call has failed with an error but will continue: %s%s", error_message.c_str(), faulting_addr);
-			break;
-		case 2:
-			break;
-		}
-	}
-
-	VKAPI_ATTR VkBool32 VKAPI_CALL dbgFunc(VkFlags msgFlags, VkDebugReportObjectTypeEXT objType,
-											uint64_t srcObject, size_t location, int32_t msgCode,
-											const char *pLayerPrefix, const char *pMsg, void *pUserData)
-	{
-		if (msgFlags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
-		{
-			if (strstr(pMsg, "IMAGE_VIEW_TYPE_1D")) return false;
-
-			rsx_log.error("ERROR: [%s] Code %d : %s", pLayerPrefix, msgCode, pMsg);
-		}
-		else if (msgFlags & VK_DEBUG_REPORT_WARNING_BIT_EXT)
-		{
-			rsx_log.warning("WARNING: [%s] Code %d : %s", pLayerPrefix, msgCode, pMsg);
-		}
-		else
-		{
-			return false;
-		}
-
-		//Let the app crash..
-		return false;
-	}
-
 	VkBool32 BreakCallback(VkFlags msgFlags, VkDebugReportObjectTypeEXT objType,
-							uint64_t srcObject, size_t location, int32_t msgCode,
+							u64 srcObject, usz location, s32 msgCode,
 							const char *pLayerPrefix, const char *pMsg, void *pUserData)
 	{
 #ifdef _WIN32

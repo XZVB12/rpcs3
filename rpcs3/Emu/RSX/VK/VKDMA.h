@@ -1,8 +1,16 @@
-﻿#pragma once
-#include "VKHelpers.h"
+#pragma once
+
+namespace utils
+{
+	class address_range;
+}
 
 namespace vk
 {
+	struct buffer;
+	class command_buffer;
+	class render_device;
+
 	std::pair<u32, vk::buffer*> map_dma(command_buffer& cmd, u32 local_address, u32 length);
 	void load_dma(u32 local_address, u32 length);
 	void flush_dma(u32 local_address, u32 length);
@@ -39,8 +47,8 @@ namespace vk
 
 	public:
 
-		void init(const render_device& dev, u32 addr, size_t size);
-		void init(dma_block* parent, u32 addr, size_t size);
+		void init(const render_device& dev, u32 addr, usz size);
+		void init(dma_block* parent, u32 addr, usz size);
 		void flush(const utils::address_range& range);
 		void load(const utils::address_range& range);
 		std::pair<u32, buffer*> get(const utils::address_range& range);
@@ -52,6 +60,6 @@ namespace vk
 		dma_block* head();
 		const dma_block* head() const;
 		void set_parent(command_buffer& cmd, dma_block* parent);
-		void extend(command_buffer& cmd, const render_device& dev, size_t new_size);
+		void extend(command_buffer& cmd, const render_device& dev, usz new_size);
 	};
 }

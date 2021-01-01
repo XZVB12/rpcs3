@@ -41,17 +41,17 @@ void np_handler::RoomGroup_to_SceNpMatching2RoomGroup(const flatbuffers::Vector<
 void np_handler::UserInfo2_to_SceNpUserInfo2(const UserInfo2* user, SceNpUserInfo2* user_info)
 {
 	if (user->npId())
-		memcpy(user_info->npId.handle.data, user->npId()->c_str(), std::min(sizeof(user_info->npId.handle.data), static_cast<std::size_t>(user->npId()->size())));
+		memcpy(user_info->npId.handle.data, user->npId()->c_str(), std::min(sizeof(user_info->npId.handle.data), static_cast<usz>(user->npId()->size())));
 
 	if (user->onlineName())
 	{
 		user_info->onlineName.set(allocate(sizeof(SceNpOnlineName)));
-		memcpy(user_info->onlineName->data, user->onlineName()->c_str(), std::min(sizeof(user_info->onlineName->data), static_cast<std::size_t>(user->onlineName()->size())));
+		memcpy(user_info->onlineName->data, user->onlineName()->c_str(), std::min(sizeof(user_info->onlineName->data), static_cast<usz>(user->onlineName()->size())));
 	}
 	if (user->avatarUrl())
 	{
 		user_info->avatarUrl.set(allocate(sizeof(SceNpAvatarUrl)));
-		memcpy(user_info->avatarUrl->data, user->avatarUrl()->c_str(), std::min(sizeof(user_info->avatarUrl->data), static_cast<std::size_t>(user->avatarUrl()->size())));
+		memcpy(user_info->avatarUrl->data, user->avatarUrl()->c_str(), std::min(sizeof(user_info->avatarUrl->data), static_cast<usz>(user->avatarUrl()->size())));
 	}
 }
 
@@ -78,7 +78,7 @@ void np_handler::SearchRoomReponse_to_SceNpMatching2SearchRoomResponse(const Sea
 			{
 				search_resp->roomDataExternal = room_info;
 			}
-			
+
 			previous_next = vm::cast(room_info.addr());
 
 			room_info->serverId           = room->serverId();
@@ -199,7 +199,7 @@ u16 np_handler::RoomDataInternal_to_SceNpMatching2RoomDataInternal(const RoomDat
 					found                  = true;
 				}
 			}
-			ASSERT(found);
+			ensure(found);
 		}
 
 		member_info->natType  = member->natType();
@@ -283,7 +283,7 @@ void np_handler::RoomMemberUpdateInfo_to_SceNpMatching2RoomMemberUpdateInfo(cons
 	if (update_info->optData())
 	{
 		sce_update_info->optData.length = update_info->optData()->data()->size();
-		for (size_t i = 0; i < 16; i++)
+		for (usz i = 0; i < 16; i++)
 		{
 			sce_update_info->optData.data[i] = update_info->optData()->data()->Get(i);
 		}
@@ -335,7 +335,7 @@ void np_handler::RoomUpdateInfo_to_SceNpMatching2RoomUpdateInfo(const RoomUpdate
 	if (update_info->optData())
 	{
 		sce_update_info->optData.length = update_info->optData()->data()->size();
-		for (size_t i = 0; i < 16; i++)
+		for (usz i = 0; i < 16; i++)
 		{
 			sce_update_info->optData.data[i] = update_info->optData()->data()->Get(i);
 		}
@@ -357,33 +357,27 @@ void np_handler::RoomMessageInfo_to_SceNpMatching2RoomMessageInfo(const RoomMess
 
 	if (sce_mi->castType != SCE_NP_MATCHING2_CASTTYPE_BROADCAST)
 	{
-	    vm::ptr<SceNpMatching2RoomMessageDestination> dst_info(allocate(sizeof(SceNpMatching2RoomMessageDestination)));
+		vm::ptr<SceNpMatching2RoomMessageDestination> dst_info(allocate(sizeof(SceNpMatching2RoomMessageDestination)));
 		sce_mi->dst = dst_info;
 	}
 
-	switch(sce_mi->castType)
+	switch (sce_mi->castType)
 	{
-		case SCE_NP_MATCHING2_CASTTYPE_BROADCAST:
-			break;
-		case SCE_NP_MATCHING2_CASTTYPE_UNICAST:
-			sce_mi->dst->unicastTarget = mi->dst()->Get(0);
-			break;
-		case SCE_NP_MATCHING2_CASTTYPE_MULTICAST:
+	case SCE_NP_MATCHING2_CASTTYPE_BROADCAST: break;
+	case SCE_NP_MATCHING2_CASTTYPE_UNICAST: sce_mi->dst->unicastTarget = mi->dst()->Get(0); break;
+	case SCE_NP_MATCHING2_CASTTYPE_MULTICAST:
+	{
+		sce_mi->dst->multicastTarget.memberIdNum = mi->dst()->size();
+		vm::ptr<be_t<u16>> member_list(allocate(sizeof(u16) * mi->dst()->size()));
+		sce_mi->dst->multicastTarget.memberId = member_list;
+		for (u32 i = 0; i < mi->dst()->size(); i++)
 		{
-			sce_mi->dst->multicastTarget.memberIdNum = mi->dst()->size();
-			vm::ptr<be_t<u16>> member_list(allocate(sizeof(u16) * mi->dst()->size()));
-			sce_mi->dst->multicastTarget.memberId = member_list;
-			for (u32 i = 0; i < mi->dst()->size(); i++)
-			{
-				sce_mi->dst->multicastTarget.memberId[i] = mi->dst()->Get(i);
-			}
-			break;
+			sce_mi->dst->multicastTarget.memberId[i] = mi->dst()->Get(i);
 		}
-		case SCE_NP_MATCHING2_CASTTYPE_MULTICAST_TEAM:
-			sce_mi->dst->multicastTargetTeamId = mi->dst()->Get(0);
-			break;
-		default:
-			ASSERT(false);
+		break;
+	}
+	case SCE_NP_MATCHING2_CASTTYPE_MULTICAST_TEAM: sce_mi->dst->multicastTargetTeamId = mi->dst()->Get(0); break;
+	default: ensure(false);
 	}
 
 	if (auto src_member = mi->srcMember())

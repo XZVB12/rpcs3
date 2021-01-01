@@ -27,7 +27,7 @@ class vec_stream
 {
 public:
 	vec_stream() = delete;
-	vec_stream(std::vector<u8>& _vec, size_t initial_index = 0)
+	vec_stream(std::vector<u8>& _vec, usz initial_index = 0)
 	    : vec(_vec)
 	    , i(initial_index){};
 	bool is_error() const
@@ -86,7 +86,7 @@ public:
 	{
 		value = reinterpret_cast<le_t<T>>(value);
 		// resize + memcpy instead?
-		for (size_t index = 0; index < sizeof(T); index++)
+		for (usz index = 0; index < sizeof(T); index++)
 		{
 			vec.push_back(*(reinterpret_cast<u8*>(&value) + index));
 		}
@@ -99,7 +99,7 @@ public:
 
 protected:
 	std::vector<u8>& vec;
-	size_t i   = 0;
+	usz i   = 0;
 	bool error = false;
 };
 
@@ -143,6 +143,7 @@ class rpcn_client
 		ErrorLogin,
 		ErrorCreate,
 		AlreadyLoggedIn,
+		AlreadyJoined,
 		DbFail,
 		NotFound,
 		Unsupported,
@@ -163,18 +164,18 @@ public:
 	void abort();
 
 	// Synchronous requests
-	bool get_server_list(u32 req_id, const std::string& communication_id, std::vector<u16>& server_list);
+	bool get_server_list(u32 req_id, const SceNpCommunicationId& communication_id, std::vector<u16>& server_list);
 	// Asynchronous requests
-	bool get_world_list(u32 req_id, u16 server_id);
-	bool createjoin_room(u32 req_id, const SceNpMatching2CreateJoinRoomRequest* req);
-	bool join_room(u32 req_id, const SceNpMatching2JoinRoomRequest* req);
-	bool leave_room(u32 req_id, const SceNpMatching2LeaveRoomRequest* req);
-	bool search_room(u32 req_id, const SceNpMatching2SearchRoomRequest* req);
-	bool set_roomdata_external(u32 req_id, const SceNpMatching2SetRoomDataExternalRequest* req);
-	bool get_roomdata_internal(u32 req_id, const SceNpMatching2GetRoomDataInternalRequest* req);
-	bool set_roomdata_internal(u32 req_id, const SceNpMatching2SetRoomDataInternalRequest* req);
-	bool ping_room_owner(u32 req_id, u64 room_id);
-	bool send_room_message(u32 req_id, const SceNpMatching2SendRoomMessageRequest* req);
+	bool get_world_list(u32 req_id, const SceNpCommunicationId& communication_id, u16 server_id);
+	bool createjoin_room(u32 req_id,const SceNpCommunicationId& communication_id, const SceNpMatching2CreateJoinRoomRequest* req);
+	bool join_room(u32 req_id, const SceNpCommunicationId& communication_id, const SceNpMatching2JoinRoomRequest* req);
+	bool leave_room(u32 req_id, const SceNpCommunicationId& communication_id, const SceNpMatching2LeaveRoomRequest* req);
+	bool search_room(u32 req_id, const SceNpCommunicationId& communication_id, const SceNpMatching2SearchRoomRequest* req);
+	bool set_roomdata_external(u32 req_id, const SceNpCommunicationId& communication_id, const SceNpMatching2SetRoomDataExternalRequest* req);
+	bool get_roomdata_internal(u32 req_id, const SceNpCommunicationId& communication_id, const SceNpMatching2GetRoomDataInternalRequest* req);
+	bool set_roomdata_internal(u32 req_id, const SceNpCommunicationId& communication_id, const SceNpMatching2SetRoomDataInternalRequest* req);
+	bool ping_room_owner(u32 req_id, const SceNpCommunicationId& communication_id, u64 room_id);
+	bool send_room_message(u32 req_id, const SceNpCommunicationId& communication_id, const SceNpMatching2SendRoomMessageRequest* req);
 	bool req_sign_infos(u32 req_id, const std::string& npid);
 	bool req_ticket(u32 req_id, const std::string& service_id);
 
@@ -206,7 +207,7 @@ protected:
 		recvn_fatal,
 	};
 
-	recvn_result recvn(u8* buf, std::size_t n);
+	recvn_result recvn(u8* buf, usz n);
 
 	bool get_reply(u32 expected_id, std::vector<u8>& data);
 
@@ -235,7 +236,7 @@ protected:
 	u32 received_version                = 0;
 
 	// UDP Signaling related
-	std::chrono::time_point<std::chrono::system_clock> last_ping_time{}, last_pong_time{};
+	steady_clock::time_point last_ping_time{}, last_pong_time{};
 
 	sockaddr_in addr_rpcn{};
 	sockaddr_in addr_rpcn_udp{};

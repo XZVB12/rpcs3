@@ -1,4 +1,4 @@
-﻿#include <QHBoxLayout>
+#include <QHBoxLayout>
 #include <QGroupBox>
 #include <QLabel>
 #include <QMessageBox>
@@ -18,6 +18,9 @@
 #include "Emu/Cell/PPUFunction.h"
 
 #include "util/yaml.hpp"
+#include "util/asm.hpp"
+#include "util/to_endian.hpp"
+#include "Utilities/File.h"
 #include "Utilities/StrUtil.h"
 #include "Utilities/bin_patch.h" // get_patches_path()
 
@@ -223,7 +226,8 @@ bool cheat_engine::resolve_script(u32& final_offset, const u32 offset, const std
 		case operand_add: return param1 += param2;
 		case operand_sub: return param1 -= param2;
 		}
-		ASSERT(false);
+
+		return ensure(0);
 	};
 
 	operand cur_op = operand_equal;
@@ -325,7 +329,7 @@ std::vector<u32> cheat_engine::search(const T value, const std::vector<u32>& to_
 		{
 			for (const auto& off : to_filter)
 			{
-				if (vm::check_addr(off, sizeof(T)))
+				if (vm::check_addr<sizeof(T)>(off))
 				{
 					if (*vm::get_super_ptr<T>(off) == value_swapped)
 						results.push_back(off);
@@ -364,7 +368,7 @@ T cheat_engine::get_value(const u32 offset, bool& success)
 
 	return cpu_thread::suspend_all(nullptr, {}, [&]() -> T
 	{
-		if (!vm::check_addr(offset, sizeof(T)))
+		if (!vm::check_addr<sizeof(T)>(offset))
 		{
 			success = false;
 			return 0;
@@ -381,21 +385,21 @@ bool cheat_engine::set_value(const u32 offset, const T value)
 	if (Emu.IsStopped())
 		return false;
 
-	if (!vm::check_addr(offset, sizeof(T)))
+	if (!vm::check_addr<sizeof(T)>(offset))
 	{
 		return false;
 	}
 
 	return cpu_thread::suspend_all(nullptr, {}, [&]
 	{
-		if (!vm::check_addr(offset, sizeof(T)))
+		if (!vm::check_addr<sizeof(T)>(offset))
 		{
 			return false;
 		}
 
 		*vm::get_super_ptr<T>(offset) = value;
 
-		const bool exec_code_at_start = vm::check_addr(offset, 1, vm::page_executable);
+		const bool exec_code_at_start = vm::check_addr(offset, vm::page_executable);
 		const bool exec_code_at_end = [&]()
 		{
 			if constexpr (sizeof(T) == 1)
@@ -404,7 +408,7 @@ bool cheat_engine::set_value(const u32 offset, const T value)
 			}
 			else
 			{
-				return vm::check_addr(offset + sizeof(T) - 1, 1, vm::page_executable);
+				return vm::check_addr(offset + sizeof(T) - 1, vm::page_executable);
 			}
 		}();
 
@@ -416,17 +420,17 @@ bool cheat_engine::set_value(const u32 offset, const T value)
 
 			if (exec_code_at_end && exec_code_at_start)
 			{
-				size = align<u32>(addr + size, 4) - (addr & -4);
+				size = utils::align<u32>(addr + size, 4) - (addr & -4);
 				addr &= -4;
 			}
 			else if (exec_code_at_end)
 			{
-				size -= align<u32>(size - 4096 + (addr & 4095), 4);
-				addr = align<u32>(addr, 4096);
+				size -= utils::align<u32>(size - 4096 + (addr & 4095), 4);
+				addr = utils::align<u32>(addr, 4096);
 			}
 			else if (exec_code_at_start)
 			{
-				size = align<u32>(4096 - (addr & 4095), 4);
+				size = utils::align<u32>(4096 - (addr & 4095), 4);
 				addr &= -4;
 			}
 
@@ -988,7 +992,7 @@ void cheat_manager_dialog::do_the_search()
 
 	lst_search->clear();
 
-	const size_t size = offsets_found.size();
+	const usz size = offsets_found.size();
 
 	if (size == 0)
 	{
@@ -1016,7 +1020,7 @@ void cheat_manager_dialog::do_the_search()
 
 void cheat_manager_dialog::update_cheat_list()
 {
-	size_t num_rows = 0;
+	usz num_rows = 0;
 	for (const auto& name : g_cheat.cheats)
 		num_rows += name.second.size();
 

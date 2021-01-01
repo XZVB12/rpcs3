@@ -1,5 +1,11 @@
-﻿#pragma once
+#pragma once
 #include "VKHelpers.h"
+#include "vkutils/query_pool.h"
+#include "vkutils/sampler.h"
+
+#include <unordered_map>
+#include <deque>
+#include <memory>
 
 namespace vk
 {

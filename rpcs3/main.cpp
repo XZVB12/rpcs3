@@ -1,4 +1,4 @@
-﻿// Qt5.10+ frontend implementation for rpcs3. Known to work on Windows, Linux, Mac
+// Qt5.10+ frontend implementation for rpcs3. Known to work on Windows, Linux, Mac
 // by Sacha Refshauge, Megamouse and flash-fire
 
 #include <iostream>
@@ -17,7 +17,7 @@
 #include "Utilities/sema.h"
 #ifdef _WIN32
 #include <windows.h>
-#include "Utilities/dynamic_library.h"
+#include "util/dyn_lib.hpp"
 DYNAMIC_IMPORT("ntdll.dll", NtQueryTimerResolution, NTSTATUS(PULONG MinimumResolution, PULONG MaximumResolution, PULONG CurrentResolution));
 DYNAMIC_IMPORT("ntdll.dll", NtSetTimerResolution, NTSTATUS(ULONG DesiredResolution, BOOLEAN SetResolution, PULONG CurrentResolution));
 #else
@@ -37,12 +37,15 @@ DYNAMIC_IMPORT("ntdll.dll", NtSetTimerResolution, NTSTATUS(ULONG DesiredResoluti
 #include <dispatch/dispatch.h>
 #endif
 
-#include "Utilities/sysinfo.h"
 #include "Utilities/Config.h"
+#include "Utilities/Thread.h"
+#include "Utilities/File.h"
 #include "rpcs3_version.h"
 #include "Emu/System.h"
 #include <thread>
 #include <charconv>
+
+#include "util/sysinfo.hpp"
 
 inline std::string sstr(const QString& _in) { return _in.toStdString(); }
 
@@ -298,8 +301,6 @@ int main(int argc, char** argv)
 	const u64 intro_time = (intro_stats.ru_utime.tv_sec + intro_stats.ru_stime.tv_sec) * 1000000000ull + (intro_stats.ru_utime.tv_usec + intro_stats.ru_stime.tv_usec) * 1000ull;
 #endif
 
-	v128::use_fma = utils::has_fma3();
-
 	s_argv0 = argv[0]; // Save for report_fatal_error
 
 	// Only run RPCS3 to display an error
@@ -357,6 +358,17 @@ int main(int argc, char** argv)
 		return 1;
 	}
 
+#ifdef _WIN32
+	if (!SetProcessWorkingSetSize(GetCurrentProcess(), 0x80000000, 0xC0000000)) // 2-3 GiB
+	{
+		report_fatal_error("Not enough memory for RPCS3 process.");
+		return 2;
+	}
+#endif
+
+	// Initialize thread pool finalizer (on first use)
+	named_thread("", []{})();
+
 	std::unique_ptr<logs::listener> log_file;
 	{
 		// Check free space
@@ -412,8 +424,17 @@ int main(int argc, char** argv)
 	struct ::rlimit rlim;
 	rlim.rlim_cur = 4096;
 	rlim.rlim_max = 4096;
+#ifdef RLIMIT_NOFILE
 	if (::setrlimit(RLIMIT_NOFILE, &rlim) != 0)
-		std::fprintf(stderr, "Failed to set max open file limit (4096).");
+		std::fprintf(stderr, "Failed to set max open file limit (4096).\n");
+#endif
+
+	rlim.rlim_cur = 0x80000000;
+	rlim.rlim_max = 0x80000000;
+#ifdef RLIMIT_MEMLOCK
+	if (::setrlimit(RLIMIT_MEMLOCK, &rlim) != 0)
+		std::fprintf(stderr, "Failed to set RLIMIT_MEMLOCK size to 2 GiB. Try to update your system configuration.\n");
+#endif
 	// Work around crash on startup on KDE: https://bugs.kde.org/show_bug.cgi?id=401637
 	setenv( "KDE_DEBUG", "1", 0 );
 #endif
@@ -566,7 +587,7 @@ extern "C"
 		return InitOnceComplete(reinterpret_cast<LPINIT_ONCE>(ppinit), f, lpc);
 	}
 
-	size_t __stdcall __std_get_string_size_without_trailing_whitespace(const char* str, size_t size) noexcept
+	usz __stdcall __std_get_string_size_without_trailing_whitespace(const char* str, usz size) noexcept
 	{
 		while (size)
 		{
@@ -589,7 +610,7 @@ extern "C"
 		return size;
 	}
 
-	size_t __stdcall __std_system_error_allocate_message(const unsigned long msg_id, char** ptr_str) noexcept
+	usz __stdcall __std_system_error_allocate_message(const unsigned long msg_id, char** ptr_str) noexcept
 	{
 		return __std_get_string_size_without_trailing_whitespace(*ptr_str, FormatMessageA(
 			FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,

@@ -1,4 +1,4 @@
-﻿#include "stdafx.h"
+#include "stdafx.h"
 #include <string>
 #include <mutex>
 #include <thread>
@@ -7,7 +7,6 @@
 #include "rpcn_client.h"
 #include "np_structs_extra.h"
 #include "Utilities/StrUtil.h"
-#include "Utilities/BEType.h"
 #include "Utilities/Thread.h"
 #include "Emu/IdManager.h"
 #include "Emu/System.h"
@@ -33,8 +32,9 @@
 
 LOG_CHANNEL(rpcn_log, "rpcn");
 
-#define RPCN_PROTOCOL_VERSION 9
+#define RPCN_PROTOCOL_VERSION 10
 #define RPCN_HEADER_SIZE 9
+#define COMMUNICATION_ID_SIZE 9
 
 rpcn_client::rpcn_client(bool in_config)
     : in_config(in_config)
@@ -91,11 +91,11 @@ void rpcn_client::disconnect()
 	server_info_received = false;
 }
 
-rpcn_client::recvn_result rpcn_client::recvn(u8* buf, std::size_t n)
+rpcn_client::recvn_result rpcn_client::recvn(u8* buf, usz n)
 {
 	u32 num_timeouts = 0;
 
-	size_t n_recv = 0;
+	usz n_recv = 0;
 	while (n_recv != n && !is_abort())
 	{
 		std::lock_guard lock(mutex_socket);
@@ -136,7 +136,7 @@ rpcn_client::recvn_result rpcn_client::recvn(u8* buf, std::size_t n)
 bool rpcn_client::send_packet(const std::vector<u8>& packet)
 {
 	u32 num_timeouts = 0;
-	std::size_t n_sent = 0;
+	usz n_sent = 0;
 	while (n_sent != packet.size())
 	{
 		std::lock_guard lock(mutex_socket);
@@ -304,7 +304,7 @@ bool rpcn_client::connect(const std::string& host)
 		return false;
 	}
 
-	last_ping_time = std::chrono::system_clock::now() - std::chrono::seconds(5);
+	last_ping_time = steady_clock::now() - 5s;
 	last_pong_time = last_ping_time;
 
 	return true;
@@ -348,9 +348,9 @@ bool rpcn_client::login(const std::string& npid, const std::string& password, co
 	// Make sure signaling works
 	if (!in_config)
 	{
-		auto start = std::chrono::system_clock::now();
+		auto start = steady_clock::now();
 
-		while (!get_addr_sig() && (std::chrono::system_clock::now() - start) < std::chrono::seconds(5))
+		while (!get_addr_sig() && steady_clock::now() - start < 5s)
 		{
 			std::this_thread::sleep_for(5ms);
 		}
@@ -408,7 +408,7 @@ bool rpcn_client::manage_connection()
 	if (authentified && !in_config)
 	{
 		// Ping the UDP Signaling Server
-		auto now = std::chrono::system_clock::now();
+		auto now = steady_clock::now();
 
 		auto rpcn_msgs = get_rpcn_msgs();
 
@@ -431,7 +431,7 @@ bool rpcn_client::manage_connection()
 		}
 
 		// Send a packet every 5 seconds and then every 500 ms until reply is received
-		if ((now - last_pong_time) > std::chrono::seconds(5) && (now - last_ping_time) > std::chrono::milliseconds(500))
+		if (now - last_pong_time > 5s && now - last_ping_time > 500ms)
 		{
 			std::vector<u8> ping(9);
 			ping[0]                                 = 1;
@@ -570,11 +570,10 @@ bool rpcn_client::get_reply(const u32 expected_id, std::vector<u8>& data)
 	return false;
 }
 
-bool rpcn_client::get_server_list(u32 req_id, const std::string& communication_id, std::vector<u16>& server_list)
+bool rpcn_client::get_server_list(u32 req_id, const SceNpCommunicationId& communication_id, std::vector<u16>& server_list)
 {
-	std::vector<u8> data{}, reply_data{};
-	std::copy(communication_id.begin(), communication_id.end(), std::back_inserter(data));
-	data.push_back(0);
+	std::vector<u8> data(COMMUNICATION_ID_SIZE), reply_data{};
+	memcpy(data.data(), communication_id.data, COMMUNICATION_ID_SIZE);
 
 	if (!forge_send_reply(CommandType::GetServerList, req_id, data, reply_data))
 		return false;
@@ -596,10 +595,11 @@ bool rpcn_client::get_server_list(u32 req_id, const std::string& communication_i
 	return true;
 }
 
-bool rpcn_client::get_world_list(u32 req_id, u16 server_id)
+bool rpcn_client::get_world_list(u32 req_id, const SceNpCommunicationId& communication_id, u16 server_id)
 {
-	std::vector<u8> data(2);
-	reinterpret_cast<le_t<u16>&>(data[0]) = server_id;
+	std::vector<u8> data(COMMUNICATION_ID_SIZE + sizeof(u16));
+	memcpy(data.data(), communication_id.data, COMMUNICATION_ID_SIZE);
+	reinterpret_cast<le_t<u16>&>(data[COMMUNICATION_ID_SIZE]) = server_id;
 
 	if (!forge_send(CommandType::GetWorldList, req_id, data))
 		return false;
@@ -607,7 +607,7 @@ bool rpcn_client::get_world_list(u32 req_id, u16 server_id)
 	return true;
 }
 
-bool rpcn_client::createjoin_room(u32 req_id, const SceNpMatching2CreateJoinRoomRequest* req)
+bool rpcn_client::createjoin_room(u32 req_id, const SceNpCommunicationId& communication_id, const SceNpMatching2CreateJoinRoomRequest* req)
 {
 	std::vector<u8> data{};
 
@@ -659,7 +659,7 @@ bool rpcn_client::createjoin_room(u32 req_id, const SceNpMatching2CreateJoinRoom
 		}
 		final_binattrexternal_vec = builder.CreateVector(davec);
 	}
-	flatbuffers::Offset<flatbuffers::Vector<uint8_t>> final_roompassword;
+	flatbuffers::Offset<flatbuffers::Vector<u8>> final_roompassword;
 	if (req->roomPassword)
 		final_roompassword = builder.CreateVector(req->roomPassword->data, 8);
 	flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<GroupConfig>>> final_groupconfigs_vec;
@@ -674,7 +674,7 @@ bool rpcn_client::createjoin_room(u32 req_id, const SceNpMatching2CreateJoinRoom
 		final_groupconfigs_vec = builder.CreateVector(davec);
 	}
 	flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<flatbuffers::String>>> final_allowedusers_vec;
-	if (req->allowedUserNum)
+	if (req->allowedUserNum && req->allowedUser)
 	{
 		std::vector<flatbuffers::Offset<flatbuffers::String>> davec;
 		for (u32 i = 0; i < req->allowedUserNum; i++)
@@ -695,7 +695,7 @@ bool rpcn_client::createjoin_room(u32 req_id, const SceNpMatching2CreateJoinRoom
 		}
 		final_blockedusers_vec = builder.CreateVector(davec);
 	}
-	flatbuffers::Offset<flatbuffers::Vector<uint8_t>> final_grouplabel;
+	flatbuffers::Offset<flatbuffers::Vector<u8>> final_grouplabel;
 	if (req->joinRoomGroupLabel)
 		final_grouplabel = builder.CreateVector(req->joinRoomGroupLabel->data, 8);
 	flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<BinAttr>>> final_memberbinattrinternal_vec;
@@ -723,11 +723,12 @@ bool rpcn_client::createjoin_room(u32 req_id, const SceNpMatching2CreateJoinRoom
 
 	builder.Finish(req_finished);
 	u8* buf        = builder.GetBufferPointer();
-	size_t bufsize = builder.GetSize();
-	data.resize(sizeof(u32) + bufsize);
+	usz bufsize = builder.GetSize();
+	data.resize(COMMUNICATION_ID_SIZE + sizeof(u32) + bufsize);
 
-	reinterpret_cast<le_t<u32>&>(data[0]) = static_cast<u32>(bufsize);
-	memcpy(data.data() + sizeof(u32), buf, bufsize);
+	memcpy(data.data(), communication_id.data, COMMUNICATION_ID_SIZE);
+	reinterpret_cast<le_t<u32>&>(data[COMMUNICATION_ID_SIZE]) = static_cast<u32>(bufsize);
+	memcpy(data.data() + COMMUNICATION_ID_SIZE + sizeof(u32), buf, bufsize);
 
 	if (!forge_send(CommandType::CreateRoom, req_id, data))
 		return false;
@@ -735,7 +736,7 @@ bool rpcn_client::createjoin_room(u32 req_id, const SceNpMatching2CreateJoinRoom
 	return true;
 }
 
-bool rpcn_client::join_room(u32 req_id, const SceNpMatching2JoinRoomRequest* req)
+bool rpcn_client::join_room(u32 req_id, const SceNpCommunicationId& communication_id, const SceNpMatching2JoinRoomRequest* req)
 {
 	std::vector<u8> data{};
 
@@ -743,10 +744,10 @@ bool rpcn_client::join_room(u32 req_id, const SceNpMatching2JoinRoomRequest* req
 
 	flatbuffers::FlatBufferBuilder builder(1024);
 
-	flatbuffers::Offset<flatbuffers::Vector<uint8_t>> final_roompassword;
+	flatbuffers::Offset<flatbuffers::Vector<u8>> final_roompassword;
 	if (req->roomPassword)
 		final_roompassword = builder.CreateVector(req->roomPassword->data, 8);
-	flatbuffers::Offset<flatbuffers::Vector<uint8_t>> final_grouplabel;
+	flatbuffers::Offset<flatbuffers::Vector<u8>> final_grouplabel;
 	if (req->joinRoomGroupLabel)
 		final_grouplabel = builder.CreateVector(req->joinRoomGroupLabel->data, 8);
 	flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<BinAttr>>> final_memberbinattrinternal_vec;
@@ -766,11 +767,12 @@ bool rpcn_client::join_room(u32 req_id, const SceNpMatching2JoinRoomRequest* req
 
 	builder.Finish(req_finished);
 	u8* buf        = builder.GetBufferPointer();
-	size_t bufsize = builder.GetSize();
-	data.resize(sizeof(u32) + bufsize);
+	usz bufsize = builder.GetSize();
+	data.resize(COMMUNICATION_ID_SIZE + sizeof(u32) + bufsize);
 
-	reinterpret_cast<le_t<u32>&>(data[0]) = static_cast<u32>(bufsize);
-	memcpy(data.data() + sizeof(u32), buf, bufsize);
+	memcpy(data.data(), communication_id.data, COMMUNICATION_ID_SIZE);
+	reinterpret_cast<le_t<u32>&>(data[COMMUNICATION_ID_SIZE]) = static_cast<u32>(bufsize);
+	memcpy(data.data() + COMMUNICATION_ID_SIZE + sizeof(u32), buf, bufsize);
 
 	if (!forge_send(CommandType::JoinRoom, req_id, data))
 		return false;
@@ -778,7 +780,7 @@ bool rpcn_client::join_room(u32 req_id, const SceNpMatching2JoinRoomRequest* req
 	return true;
 }
 
-bool rpcn_client::leave_room(u32 req_id, const SceNpMatching2LeaveRoomRequest* req)
+bool rpcn_client::leave_room(u32 req_id, const SceNpCommunicationId& communication_id, const SceNpMatching2LeaveRoomRequest* req)
 {
 	std::vector<u8> data{};
 
@@ -787,11 +789,12 @@ bool rpcn_client::leave_room(u32 req_id, const SceNpMatching2LeaveRoomRequest* r
 	auto req_finished                                     = CreateLeaveRoomRequest(builder, req->roomId, final_optdata);
 	builder.Finish(req_finished);
 	u8* buf        = builder.GetBufferPointer();
-	size_t bufsize = builder.GetSize();
-	data.resize(sizeof(u32) + bufsize);
+	usz bufsize = builder.GetSize();
+	data.resize(COMMUNICATION_ID_SIZE + sizeof(u32) + bufsize);
 
-	reinterpret_cast<le_t<u32>&>(data[0]) = static_cast<u32>(bufsize);
-	memcpy(data.data() + sizeof(u32), buf, bufsize);
+	memcpy(data.data(), communication_id.data, COMMUNICATION_ID_SIZE);
+	reinterpret_cast<le_t<u32>&>(data[COMMUNICATION_ID_SIZE]) = static_cast<u32>(bufsize);
+	memcpy(data.data() + COMMUNICATION_ID_SIZE + sizeof(u32), buf, bufsize);
 
 	if (!forge_send(CommandType::LeaveRoom, req_id, data))
 		return false;
@@ -799,7 +802,7 @@ bool rpcn_client::leave_room(u32 req_id, const SceNpMatching2LeaveRoomRequest* r
 	return true;
 }
 
-bool rpcn_client::search_room(u32 req_id, const SceNpMatching2SearchRoomRequest* req)
+bool rpcn_client::search_room(u32 req_id, const SceNpCommunicationId& communication_id, const SceNpMatching2SearchRoomRequest* req)
 {
 	std::vector<u8> data{};
 
@@ -830,7 +833,7 @@ bool rpcn_client::search_room(u32 req_id, const SceNpMatching2SearchRoomRequest*
 		}
 		final_binfilter_vec = builder.CreateVector(davec);
 	}
-	flatbuffers::Offset<flatbuffers::Vector<uint16_t>> attrid_vec;
+	flatbuffers::Offset<flatbuffers::Vector<u16>> attrid_vec;
 	if (req->attrIdNum)
 		attrid_vec = builder.CreateVector(reinterpret_cast<const u16*>(req->attrId.get_ptr()), req->attrIdNum);
 
@@ -852,11 +855,12 @@ bool rpcn_client::search_room(u32 req_id, const SceNpMatching2SearchRoomRequest*
 	auto req_finished = s_req.Finish();
 	builder.Finish(req_finished);
 	u8* buf        = builder.GetBufferPointer();
-	size_t bufsize = builder.GetSize();
-	data.resize(bufsize + sizeof(u32));
+	usz bufsize = builder.GetSize();
+	data.resize(COMMUNICATION_ID_SIZE + bufsize + sizeof(u32));
 
-	reinterpret_cast<le_t<u32>&>(data[0]) = static_cast<u32>(bufsize);
-	memcpy(data.data() + sizeof(u32), buf, bufsize);
+	memcpy(data.data(), communication_id.data, COMMUNICATION_ID_SIZE);
+	reinterpret_cast<le_t<u32>&>(data[COMMUNICATION_ID_SIZE]) = static_cast<u32>(bufsize);
+	memcpy(data.data() + COMMUNICATION_ID_SIZE + sizeof(u32), buf, bufsize);
 
 	if (!forge_send(CommandType::SearchRoom, req_id, data))
 		return false;
@@ -864,7 +868,7 @@ bool rpcn_client::search_room(u32 req_id, const SceNpMatching2SearchRoomRequest*
 	return true;
 }
 
-bool rpcn_client::set_roomdata_external(u32 req_id, const SceNpMatching2SetRoomDataExternalRequest* req)
+bool rpcn_client::set_roomdata_external(u32 req_id, const SceNpCommunicationId& communication_id, const SceNpMatching2SetRoomDataExternalRequest* req)
 {
 	std::vector<u8> data{};
 
@@ -906,11 +910,12 @@ bool rpcn_client::set_roomdata_external(u32 req_id, const SceNpMatching2SetRoomD
 
 	builder.Finish(req_finished);
 	u8* buf        = builder.GetBufferPointer();
-	size_t bufsize = builder.GetSize();
-	data.resize(sizeof(u32) + bufsize);
+	usz bufsize = builder.GetSize();
+	data.resize(COMMUNICATION_ID_SIZE + bufsize + sizeof(u32));
 
-	reinterpret_cast<le_t<u32>&>(data[0]) = static_cast<u32>(bufsize);
-	memcpy(data.data() + sizeof(u32), buf, bufsize);
+	memcpy(data.data(), communication_id.data, COMMUNICATION_ID_SIZE);
+	reinterpret_cast<le_t<u32>&>(data[COMMUNICATION_ID_SIZE]) = static_cast<u32>(bufsize);
+	memcpy(data.data() + COMMUNICATION_ID_SIZE + sizeof(u32), buf, bufsize);
 
 	if (!forge_send(CommandType::SetRoomDataExternal, req_id, data))
 		return false;
@@ -918,13 +923,13 @@ bool rpcn_client::set_roomdata_external(u32 req_id, const SceNpMatching2SetRoomD
 	return true;
 }
 
-bool rpcn_client::get_roomdata_internal(u32 req_id, const SceNpMatching2GetRoomDataInternalRequest* req)
+bool rpcn_client::get_roomdata_internal(u32 req_id, const SceNpCommunicationId& communication_id, const SceNpMatching2GetRoomDataInternalRequest* req)
 {
 	std::vector<u8> data{}, reply_data{};
 
 	flatbuffers::FlatBufferBuilder builder(1024);
 
-	flatbuffers::Offset<flatbuffers::Vector<uint16_t>> final_attr_ids_vec;
+	flatbuffers::Offset<flatbuffers::Vector<u16>> final_attr_ids_vec;
 	if (req->attrIdNum)
 		final_attr_ids_vec = builder.CreateVector(reinterpret_cast<const u16*>(req->attrId.get_ptr()), req->attrIdNum);
 
@@ -932,11 +937,12 @@ bool rpcn_client::get_roomdata_internal(u32 req_id, const SceNpMatching2GetRoomD
 
 	builder.Finish(req_finished);
 	u8* buf        = builder.GetBufferPointer();
-	size_t bufsize = builder.GetSize();
-	data.resize(sizeof(u32) + bufsize);
+	usz bufsize = builder.GetSize();
+	data.resize(COMMUNICATION_ID_SIZE + bufsize + sizeof(u32));
 
-	reinterpret_cast<le_t<u32>&>(data[0]) = static_cast<u32>(bufsize);
-	memcpy(data.data() + sizeof(u32), buf, bufsize);
+	memcpy(data.data(), communication_id.data, COMMUNICATION_ID_SIZE);
+	reinterpret_cast<le_t<u32>&>(data[COMMUNICATION_ID_SIZE]) = static_cast<u32>(bufsize);
+	memcpy(data.data() + COMMUNICATION_ID_SIZE + sizeof(u32), buf, bufsize);
 
 	if (!forge_send(CommandType::GetRoomDataInternal, req_id, data))
 		return false;
@@ -944,7 +950,7 @@ bool rpcn_client::get_roomdata_internal(u32 req_id, const SceNpMatching2GetRoomD
 	return true;
 }
 
-bool rpcn_client::set_roomdata_internal(u32 req_id, const SceNpMatching2SetRoomDataInternalRequest* req)
+bool rpcn_client::set_roomdata_internal(u32 req_id, const SceNpCommunicationId& communication_id, const SceNpMatching2SetRoomDataInternalRequest* req)
 {
 	std::vector<u8> data{};
 
@@ -977,7 +983,7 @@ bool rpcn_client::set_roomdata_internal(u32 req_id, const SceNpMatching2SetRoomD
 	if (req->passwordSlotMask)
 		final_passwordSlotMask = *req->passwordSlotMask;
 
-	flatbuffers::Offset<flatbuffers::Vector<uint16_t>> final_ownerprivilege_vec;
+	flatbuffers::Offset<flatbuffers::Vector<u16>> final_ownerprivilege_vec;
 	if (req->ownerPrivilegeRankNum)
 		final_ownerprivilege_vec = builder.CreateVector(reinterpret_cast<const u16*>(req->ownerPrivilegeRank.get_ptr()), req->ownerPrivilegeRankNum);
 
@@ -986,11 +992,12 @@ bool rpcn_client::set_roomdata_internal(u32 req_id, const SceNpMatching2SetRoomD
 
 	builder.Finish(req_finished);
 	u8* buf        = builder.GetBufferPointer();
-	size_t bufsize = builder.GetSize();
-	data.resize(sizeof(u32) + bufsize);
+	usz bufsize = builder.GetSize();
+	data.resize(COMMUNICATION_ID_SIZE + bufsize + sizeof(u32));
 
-	reinterpret_cast<le_t<u32>&>(data[0]) = static_cast<u32>(bufsize);
-	memcpy(data.data() + sizeof(u32), buf, bufsize);
+	memcpy(data.data(), communication_id.data, COMMUNICATION_ID_SIZE);
+	reinterpret_cast<le_t<u32>&>(data[COMMUNICATION_ID_SIZE]) = static_cast<u32>(bufsize);
+	memcpy(data.data() + COMMUNICATION_ID_SIZE + sizeof(u32), buf, bufsize);
 
 	if (!forge_send(CommandType::SetRoomDataInternal, req_id, data))
 		return false;
@@ -998,12 +1005,14 @@ bool rpcn_client::set_roomdata_internal(u32 req_id, const SceNpMatching2SetRoomD
 	return true;
 }
 
-bool rpcn_client::ping_room_owner(u32 req_id, u64 room_id)
+bool rpcn_client::ping_room_owner(u32 req_id, const SceNpCommunicationId& communication_id, u64 room_id)
 {
 	std::vector<u8> data{};
 
-	data.resize(8);
-	reinterpret_cast<le_t<u64>&>(data[0]) = room_id;
+	data.resize(COMMUNICATION_ID_SIZE + sizeof(u64));
+
+	memcpy(data.data(), communication_id.data, COMMUNICATION_ID_SIZE);
+	reinterpret_cast<le_t<u64>&>(data[COMMUNICATION_ID_SIZE]) = room_id;
 
 	if (!forge_send(CommandType::PingRoomOwner, req_id, data))
 		return false;
@@ -1011,7 +1020,7 @@ bool rpcn_client::ping_room_owner(u32 req_id, u64 room_id)
 	return true;
 }
 
-bool rpcn_client::send_room_message(u32 req_id, const SceNpMatching2SendRoomMessageRequest* req)
+bool rpcn_client::send_room_message(u32 req_id, const SceNpCommunicationId& communication_id, const SceNpMatching2SendRoomMessageRequest* req)
 {
 	std::vector<u8> data{};
 	flatbuffers::FlatBufferBuilder builder(1024);
@@ -1034,7 +1043,7 @@ bool rpcn_client::send_room_message(u32 req_id, const SceNpMatching2SendRoomMess
 			dst.push_back(req->dst.multicastTargetTeamId);
 			break;
 		default:
-			ASSERT(false);
+			ensure(false);
 			break;
 	}
 
@@ -1042,11 +1051,12 @@ bool rpcn_client::send_room_message(u32 req_id, const SceNpMatching2SendRoomMess
 
 	builder.Finish(req_finished);
 	u8* buf        = builder.GetBufferPointer();
-	size_t bufsize = builder.GetSize();
-	data.resize(sizeof(u32) + bufsize);
+	usz bufsize = builder.GetSize();
+	data.resize(COMMUNICATION_ID_SIZE + bufsize + sizeof(u32));
 
-	reinterpret_cast<le_t<u32>&>(data[0]) = static_cast<u32>(bufsize);
-	memcpy(data.data() + sizeof(u32), buf, bufsize);
+	memcpy(data.data(), communication_id.data, COMMUNICATION_ID_SIZE);
+	reinterpret_cast<le_t<u32>&>(data[COMMUNICATION_ID_SIZE]) = static_cast<u32>(bufsize);
+	memcpy(data.data() + COMMUNICATION_ID_SIZE + sizeof(u32), buf, bufsize);
 
 	if (!forge_send(CommandType::SendRoomMessage, req_id, data))
 		return false;
@@ -1143,6 +1153,6 @@ bool rpcn_client::is_abort()
 
 void rpcn_client::abort()
 {
-	ASSERT(in_config);
+	ensure(in_config);
 	abort_config = true;
 }

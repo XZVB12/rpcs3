@@ -1,14 +1,27 @@
-﻿#pragma once
+#pragma once
 
-#include "Utilities/types.h"
+#include "util/types.hpp"
 #include "util/logs.hpp"
-#include "Utilities/sysinfo.h"
 #include "system_config.h"
 #include "IdManager.h"
 #include <array>
 #include <cmath>
 
 LOG_CHANNEL(perf_log, "PERF");
+
+#ifdef _MSC_VER
+extern "C" u64 __rdtsc();
+
+inline u64 get_tsc()
+{
+	return __rdtsc();
+}
+#else
+inline u64 get_tsc()
+{
+	return __builtin_ia32_rdtsc();
+}
+#endif
 
 // TODO: constexpr with the help of bitcast
 template <auto Name>
@@ -31,6 +44,15 @@ protected:
 	// Accumulate values from a thread
 	void push(u64 ns[66]) noexcept;
 
+	// Get end time; accumulate value to the TLS
+	static void push(u64 ns[66], u64 start_time, const char* name) noexcept;
+
+	// Register TLS storage for stats
+	static void add(u64 ns[66], const char* name) noexcept;
+
+	// Unregister TLS storage and drain its data
+	static void remove(u64 ns[66], const char* name) noexcept;
+
 public:
 	perf_stat_base() noexcept = default;
 
@@ -39,6 +61,9 @@ public:
 	perf_stat_base& operator =(const perf_stat_base&) = delete;
 
 	~perf_stat_base() {}
+
+	// Collect all data, report it, and clean
+	static void report() noexcept;
 };
 
 // Object that prints event length stats at the end
@@ -50,31 +75,22 @@ class perf_stat final : public perf_stat_base
 		// Local non-atomic values for increments
 		u64 m_log[66]{};
 
+		perf_stat_local() noexcept
+		{
+			perf_stat_base::add(m_log, perf_name<ShortName>.data());
+		}
+
 		~perf_stat_local()
 		{
-			// Update on thread exit
-			if (m_log[0])
-			{
-				if (auto* pfs = g_fxo->get<perf_stat>())
-				{
-					pfs->perf_stat_base::push(m_log);
-				}
-			}
+			perf_stat_base::remove(m_log, perf_name<ShortName>.data());
 		}
+
 	} g_tls_perf_stat;
 
 public:
-	~perf_stat()
+	static SAFE_BUFFERS FORCE_INLINE void push(u64 start_time) noexcept
 	{
-		perf_stat_base::print(perf_name<ShortName>.data());
-	}
-
-	void push(u64 ns) noexcept
-	{
-		auto& data = g_tls_perf_stat.m_log;
-		data[0] += ns != 0;
-		data[64 - std::countl_zero(ns)]++;
-		data[65] += ns;
+		perf_stat_base::push(g_tls_perf_stat.m_log, start_time, perf_name<ShortName>.data());
 	}
 };
 
@@ -123,14 +139,14 @@ public:
 	}
 
 	// Push subevent data in array
-	template <auto Event, std::size_t Index = 0>
+	template <auto Event, usz Index = 0>
 	SAFE_BUFFERS void push() noexcept
 	{
 		// TODO: should use more efficient search with type comparison, then value comparison, or pattern matching
 		if constexpr (std::array<bool, sizeof...(SubEvents)>{(SubEvents == Event)...}[Index])
 		{
 			// Push actual timestamp into an array
-			m_timestamps[Index + 1] = __rdtsc();
+			m_timestamps[Index + 1] = get_tsc();
 		}
 		else if constexpr (Index < sizeof...(SubEvents))
 		{
@@ -154,7 +170,7 @@ public:
 	// Re-initialize first timestamp
 	SAFE_BUFFERS FORCE_INLINE void restart() noexcept
 	{
-		m_timestamps[0] = __rdtsc();
+		m_timestamps[0] = get_tsc();
 		std::memset(m_timestamps + 1, 0, sizeof(m_timestamps) - sizeof(u64));
 	}
 
@@ -171,20 +187,8 @@ public:
 			return;
 		}
 
-		// Event end
-		const u64 end_time = __rdtsc();
-
-		// Compute difference in seconds
-		const f64 diff = (end_time - m_timestamps[0]) * 1. / utils::get_tsc_freq();
-
 		// Register perf stat in nanoseconds
-		g_fxo->get<perf_stat<ShortName>>()->push(static_cast<u64>(diff * 1000'000'000.));
-
-		// Print in microseconds
-		if (static_cast<u64>(diff * 1000'000.) >= g_cfg.core.perf_report_threshold)
-		{
-			perf_log.notice(u8"%s: %.3fµs", perf_name<ShortName>.data(), diff * 1000'000.);
-		}
+		perf_stat<ShortName>::push(m_timestamps[0]);
 
 		// TODO: handle push(), currently ignored
 	}

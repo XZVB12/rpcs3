@@ -1,12 +1,14 @@
-﻿#include "stdafx.h"
+#include "stdafx.h"
 #include "sys_memory.h"
 
 #include "Emu/Memory/vm_locking.h"
 #include "Emu/CPU/CPUThread.h"
 #include "Emu/Cell/ErrorCodes.h"
+#include "Emu/Cell/SPUThread.h"
 #include "Emu/IdManager.h"
 
 #include "util/vm.hpp"
+#include "util/asm.hpp"
 
 LOG_CHANNEL(sys_memory);
 
@@ -56,14 +58,15 @@ error_code sys_memory_allocate(cpu_thread& cpu, u32 size, u64 flags, vm::ptr<u32
 		return CELL_ENOMEM;
 	}
 
-	if (const auto area = vm::reserve_map(align == 0x10000 ? vm::user64k : vm::user1m, 0, ::align(size, 0x10000000), 0x401))
+	if (const auto area = vm::reserve_map(align == 0x10000 ? vm::user64k : vm::user1m, 0, utils::align(size, 0x10000000), 0x401))
 	{
-		if (u32 addr = area->alloc(size, align))
+		if (u32 addr = area->alloc(size, nullptr, align))
 		{
-			verify(HERE), !g_fxo->get<sys_memory_address_table>()->addrs[addr >> 16].exchange(dct);
+			ensure(!g_fxo->get<sys_memory_address_table>()->addrs[addr >> 16].exchange(dct));
 
 			if (alloc_addr)
 			{
+				vm::lock_sudo(addr, size);
 				*alloc_addr = addr;
 				return CELL_OK;
 			}
@@ -126,14 +129,15 @@ error_code sys_memory_allocate_from_container(cpu_thread& cpu, u32 size, u32 cid
 		return ct.ret;
 	}
 
-	if (const auto area = vm::reserve_map(align == 0x10000 ? vm::user64k : vm::user1m, 0, ::align(size, 0x10000000), 0x401))
+	if (const auto area = vm::reserve_map(align == 0x10000 ? vm::user64k : vm::user1m, 0, utils::align(size, 0x10000000), 0x401))
 	{
 		if (u32 addr = area->alloc(size))
 		{
-			verify(HERE), !g_fxo->get<sys_memory_address_table>()->addrs[addr >> 16].exchange(ct.ptr.get());
+			ensure(!g_fxo->get<sys_memory_address_table>()->addrs[addr >> 16].exchange(ct.ptr.get()));
 
 			if (alloc_addr)
 			{
+				vm::lock_sudo(addr, size);
 				*alloc_addr = addr;
 				return CELL_OK;
 			}
@@ -161,7 +165,7 @@ error_code sys_memory_free(cpu_thread& cpu, u32 addr)
 		return {CELL_EINVAL, addr};
 	}
 
-	const auto size = verify(HERE, vm::dealloc(addr));
+	const auto size = (ensure(vm::dealloc(addr)));
 	reader_lock{id_manager::g_mutex}, ct->used -= size;
 	return CELL_OK;
 }
@@ -174,12 +178,12 @@ error_code sys_memory_get_page_attribute(cpu_thread& cpu, u32 addr, vm::ptr<sys_
 
 	vm::reader_lock rlock;
 
-	if (!vm::check_addr(addr))
+	if (!vm::check_addr(addr) || addr >= SPU_FAKE_BASE_ADDR)
 	{
 		return CELL_EINVAL;
 	}
 
-	if (!vm::check_addr(attr.addr(), attr.size()))
+	if (!vm::check_addr(attr.addr(), vm::page_readable, attr.size()))
 	{
 		return CELL_EFAULT;
 	}
@@ -187,11 +191,11 @@ error_code sys_memory_get_page_attribute(cpu_thread& cpu, u32 addr, vm::ptr<sys_
 	attr->attribute = 0x40000ull; // SYS_MEMORY_PROT_READ_WRITE (TODO)
 	attr->access_right = addr >> 28 == 0xdu ? SYS_MEMORY_ACCESS_RIGHT_PPU_THR : SYS_MEMORY_ACCESS_RIGHT_ANY;// (TODO)
 
-	if (vm::check_addr(addr, 1, vm::page_1m_size))
+	if (vm::check_addr(addr, vm::page_1m_size))
 	{
 		attr->page_size = 0x100000;
 	}
-	else if (vm::check_addr(addr, 1, vm::page_64k_size))
+	else if (vm::check_addr(addr, vm::page_64k_size))
 	{
 		attr->page_size = 0x10000;
 	}

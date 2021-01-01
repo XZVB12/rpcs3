@@ -13,16 +13,16 @@ namespace vm
 
 	enum range_lock_flags : u64
 	{
-		/* flags (3 bits, RWX) */
+		/* flags (3 bits, W + R + Reserved) */
 
-		range_readable = 4ull << 61,
-		range_writable = 2ull << 61,
-		range_executable = 1ull << 61,
+		range_writable = 4ull << 61,
+		range_readable = 2ull << 61,
+		range_reserved = 1ull << 61,
 		range_full_mask = 7ull << 61,
 
 		/* flag combinations with special meaning */
 
-		range_locked = 1ull << 61, // R+W as well, but being exclusively accessed (size extends addr)
+		range_locked = 4ull << 61, // R+W as well, but being exclusively accessed (size extends addr)
 		range_allocation = 0, // Allocation, no safe access, g_shmem may change at ANY location
 
 		range_pos = 61,
@@ -51,6 +51,13 @@ namespace vm
 
 		// Old-style conditional constexpr
 		const u32 size = Size ? Size : _size;
+
+		if (size <= 4096u && !((begin | size) & (size - 1)) ? !vm::check_addr(begin) : !vm::check_addr(begin, vm::page_readable, size))
+		{
+			range_lock->release(0);
+			range_lock_internal(range_lock, begin, _size);
+			return;
+		}
 
 		const u64 lock_val = g_range_lock.load();
 		const u64 is_share = g_shmem[begin >> 16].load();

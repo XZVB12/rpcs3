@@ -11,7 +11,9 @@
 #include "sceNp.h"
 #include "cellSysutil.h"
 
+#include "Emu/Cell/lv2/sys_time.h"
 #include "Emu/NP/np_handler.h"
+#include "Emu/NP/np_contexts.h"
 
 LOG_CHANNEL(sceNp);
 
@@ -443,12 +445,12 @@ error_code sceNpTerm()
 
 error_code npDrmIsAvailable(vm::cptr<u8> k_licensee_addr, vm::cptr<char> drm_path)
 {
-	v128 k_licensee{};
+	u128 k_licensee{};
 
 	if (k_licensee_addr)
 	{
 		std::memcpy(&k_licensee, k_licensee_addr.get_ptr(), sizeof(k_licensee));
-		sceNp.notice("npDrmIsAvailable(): KLicense key %s", std::bit_cast<be_t<v128>>(k_licensee));
+		sceNp.notice("npDrmIsAvailable(): KLicense key %s", std::bit_cast<be_t<u128>>(k_licensee));
 	}
 
 	if (Emu.GetCat() == "PE")
@@ -484,7 +486,7 @@ error_code npDrmIsAvailable(vm::cptr<u8> k_licensee_addr, vm::cptr<char> drm_pat
 		if (!k_licensee_addr)
 			k_licensee = get_default_self_klic();
 
-		if (verify_npdrm_self_headers(enc_file, k_licensee._bytes))
+		if (verify_npdrm_self_headers(enc_file, reinterpret_cast<u8*>(&k_licensee)))
 		{
 			npdrmkeys->devKlic = k_licensee;
 		}
@@ -500,7 +502,7 @@ error_code npDrmIsAvailable(vm::cptr<u8> k_licensee_addr, vm::cptr<char> drm_pat
 
 		std::string contentID;
 
-		if (VerifyEDATHeaderWithKLicense(enc_file, enc_drm_path_local, k_licensee._bytes, &contentID))
+		if (VerifyEDATHeaderWithKLicense(enc_file, enc_drm_path_local, reinterpret_cast<u8*>(&k_licensee), &contentID))
 		{
 			const std::string rap_file = rap_dir_path + contentID + ".rap";
 			npdrmkeys->devKlic = k_licensee;
@@ -549,7 +551,7 @@ error_code sceNpDrmVerifyUpgradeLicense(vm::cptr<char> content_id)
 
 	const std::string content_str(content_id.get_ptr(), std::find(content_id.get_ptr(), content_id.get_ptr() + 0x2f, '\0'));
 
-	sceNp.warning("sceNpDrmVerifyUpgradeLicense(): content_id=“%s”", content_id);
+	sceNp.warning(u8"sceNpDrmVerifyUpgradeLicense(): content_id=“%s”", content_id);
 
 	if (!fs::is_file(vfs::get("/dev_hdd0/home/" + Emu.GetUsr() + "/exdata/" + content_str + ".rap")))
 	{
@@ -572,7 +574,7 @@ error_code sceNpDrmVerifyUpgradeLicense2(vm::cptr<char> content_id)
 
 	const std::string content_str(content_id.get_ptr(), std::find(content_id.get_ptr(), content_id.get_ptr() + 0x2f, '\0'));
 
-	sceNp.warning("sceNpDrmVerifyUpgradeLicense2(): content_id=“%s”", content_id);
+	sceNp.warning(u8"sceNpDrmVerifyUpgradeLicense2(): content_id=“%s”", content_id);
 
 	if (!fs::is_file(vfs::get("/dev_hdd0/home/" + Emu.GetUsr() + "/exdata/" + content_str + ".rap")))
 	{
@@ -1955,7 +1957,7 @@ error_code sceNpLookupTerm()
 
 error_code sceNpLookupCreateTitleCtx(vm::cptr<SceNpCommunicationId> communicationId, vm::cptr<SceNpId> selfNpId)
 {
-	sceNp.warning("sceNpLookupCreateTitleCtx(communicationId=*0x%x, selfNpId=0x%x)", communicationId, selfNpId);
+	sceNp.warning("sceNpLookupCreateTitleCtx(communicationId=*0x%x(%s), selfNpId=0x%x)", communicationId, communicationId->data, selfNpId);
 
 	const auto nph = g_fxo->get<named_thread<np_handler>>();
 
@@ -1969,7 +1971,7 @@ error_code sceNpLookupCreateTitleCtx(vm::cptr<SceNpCommunicationId> communicatio
 		return SCE_NP_COMMUNITY_ERROR_INSUFFICIENT_ARGUMENT;
 	}
 
-	return not_an_error(nph->create_lookup_title_context(communicationId));
+	return not_an_error(create_lookup_title_context(communicationId));
 }
 
 error_code sceNpLookupDestroyTitleCtx(s32 titleCtxId)
@@ -1983,7 +1985,7 @@ error_code sceNpLookupDestroyTitleCtx(s32 titleCtxId)
 		return SCE_NP_COMMUNITY_ERROR_NOT_INITIALIZED;
 	}
 
-	if (!nph->destroy_lookup_title_context(titleCtxId))
+	if (!destroy_lookup_title_context(titleCtxId))
 		return SCE_NP_COMMUNITY_ERROR_INVALID_ID;
 
 	return CELL_OK;
@@ -2005,7 +2007,7 @@ error_code sceNpLookupCreateTransactionCtx(s32 titleCtxId)
 		return SCE_NP_COMMUNITY_ERROR_INVALID_ONLINE_ID;
 	}
 
-	return not_an_error(nph->create_lookup_transaction_context(titleCtxId));
+	return not_an_error(create_lookup_transaction_context(titleCtxId));
 }
 
 error_code sceNpLookupDestroyTransactionCtx(s32 transId)
@@ -2019,7 +2021,7 @@ error_code sceNpLookupDestroyTransactionCtx(s32 transId)
 		return SCE_NP_COMMUNITY_ERROR_NOT_INITIALIZED;
 	}
 
-	if (!nph->destroy_lookup_transaction_context(transId))
+	if (!destroy_lookup_transaction_context(transId))
 	{
 		return SCE_NP_COMMUNITY_ERROR_INVALID_ID;
 	}
@@ -2426,7 +2428,9 @@ error_code sceNpLookupTitleSmallStorageAsync(s32 transId, vm::ptr<void> data, u6
 		return SCE_NP_COMMUNITY_ERROR_INVALID_ONLINE_ID;
 	}
 
+	// TSS are game specific data we don't have access to, set buf to 0, return size 0
 	std::memset(data.get_ptr(), 0, maxSize);
+	*contentLength = 0;
 
 	return CELL_OK;
 }
@@ -2516,9 +2520,18 @@ error_code sceNpManagerGetNetworkTime(vm::ptr<CellRtcTick> pTick)
 		return SCE_NP_ERROR_INVALID_STATE;
 	}
 
-	auto now    = std::chrono::system_clock::now();
-	// That's assuming epoch is unix epoch which is not actually standardized, god I hate you C++ std
-	pTick->tick = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count() + (62135596800 * 1000 * 1000);
+	vm::var<s64> sec;
+	vm::var<s64> nsec;
+
+	error_code ret = sys_time_get_current_time(sec, nsec);
+
+	if (ret != CELL_OK)
+	{
+		return ret;
+	}
+
+	// Taken from cellRtc
+	pTick->tick = *nsec / 1000 + *sec * cellRtcGetTickResolution() + 62135596800000000ULL;
 
 	return CELL_OK;
 }
@@ -3274,7 +3287,7 @@ error_code sceNpScoreCreateTitleCtx(vm::cptr<SceNpCommunicationId> communication
 		return SCE_NP_COMMUNITY_ERROR_INSUFFICIENT_ARGUMENT;
 	}
 
-	return not_an_error(nph->create_score_context(communicationId, passphrase));
+	return not_an_error(create_score_context(communicationId, passphrase));
 }
 
 error_code sceNpScoreDestroyTitleCtx(s32 titleCtxId)
@@ -3288,7 +3301,7 @@ error_code sceNpScoreDestroyTitleCtx(s32 titleCtxId)
 		return SCE_NP_COMMUNITY_ERROR_NOT_INITIALIZED;
 	}
 
-	if (!nph->destroy_score_context(titleCtxId))
+	if (!destroy_score_context(titleCtxId))
 		return SCE_NP_COMMUNITY_ERROR_INVALID_ID;
 
 	return CELL_OK;
@@ -3310,7 +3323,7 @@ error_code sceNpScoreCreateTransactionCtx(s32 titleCtxId)
 		return SCE_NP_COMMUNITY_ERROR_INVALID_ONLINE_ID;
 	}
 
-	return not_an_error(nph->create_score_transaction_context(titleCtxId));
+	return not_an_error(create_score_transaction_context(titleCtxId));
 }
 
 error_code sceNpScoreDestroyTransactionCtx(s32 transId)
@@ -4386,7 +4399,7 @@ error_code sceNpSignalingCreateCtx(vm::ptr<SceNpId> npId, vm::ptr<SceNpSignaling
 	//	return SCE_NP_SIGNALING_ERROR_CTX_MAX;
 	//}
 
-	*ctx_id = nph->create_signaling_context(npId, handler, arg);
+	*ctx_id = create_signaling_context(npId, handler, arg);
 
 	const auto sigh = g_fxo->get<named_thread<signaling_handler>>();
 	sigh->set_sig_cb(*ctx_id, handler, arg);
@@ -4405,7 +4418,7 @@ error_code sceNpSignalingDestroyCtx(u32 ctx_id)
 		return SCE_NP_SIGNALING_ERROR_NOT_INITIALIZED;
 	}
 
-	if (!nph->destroy_signaling_context(ctx_id))
+	if (!destroy_signaling_context(ctx_id))
 	{
 		return SCE_NP_SIGNALING_ERROR_CTX_NOT_FOUND;
 	}
@@ -4740,10 +4753,10 @@ error_code sceNpUtilCmpNpIdInOrder(vm::cptr<SceNpId> id1, vm::cptr<SceNpId> id2,
 		return SCE_NP_UTIL_ERROR_INVALID_ARGUMENT;
 	}
 
-	if (id1->reserved[0] != 1 || id2->reserved[0] != 1)
-	{
-		return SCE_NP_UTIL_ERROR_INVALID_NP_ID;
-	}
+	// if (id1->reserved[0] != 1 || id2->reserved[0] != 1)
+	// {
+	// 	return SCE_NP_UTIL_ERROR_INVALID_NP_ID;
+	// }
 
 	if (s32 res = strncmp(id1->handle.data, id2->handle.data, 16))
 	{
@@ -4763,7 +4776,7 @@ error_code sceNpUtilCmpNpIdInOrder(vm::cptr<SceNpId> id1, vm::cptr<SceNpId> id2,
 	if (opt14 == 0 && opt24 == 0)
 	{
 		*order = 0;
-		return CELL_OK;	
+		return CELL_OK;
 	}
 
 	if (opt14 != 0 && opt24 != 0)
@@ -4787,10 +4800,10 @@ error_code sceNpUtilCmpOnlineId(vm::cptr<SceNpId> id1, vm::cptr<SceNpId> id2)
 		return SCE_NP_UTIL_ERROR_INVALID_ARGUMENT;
 	}
 
-	if (id1->reserved[0] != 1 || id2->reserved[0] != 1)
-	{
-		return SCE_NP_UTIL_ERROR_INVALID_NP_ID;
-	}
+	// if (id1->reserved[0] != 1 || id2->reserved[0] != 1)
+	// {
+	// 	return SCE_NP_UTIL_ERROR_INVALID_NP_ID;
+	// }
 
 	if (strncmp(id1->handle.data, id2->handle.data, 16) != 0)
 	{
@@ -4816,7 +4829,7 @@ error_code sceNpUtilGetPlatformType(vm::cptr<SceNpId> npId)
 	case "psp2"_u32:
 		return not_an_error(SCE_NP_PLATFORM_TYPE_VITA);
 	case "ps3\0"_u32:
-		return not_an_error(SCE_NP_PLATFORM_TYPE_PS3); 
+		return not_an_error(SCE_NP_PLATFORM_TYPE_PS3);
 	case 0u:
 		return not_an_error(SCE_NP_PLATFORM_TYPE_NONE);
 	default:

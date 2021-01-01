@@ -1,4 +1,4 @@
-﻿#include "stdafx.h"
+#include "stdafx.h"
 #include "PadHandler.h"
 #include "Emu/System.h"
 #include "Input/pad_thread.h"
@@ -253,7 +253,7 @@ std::string PadHandlerBase::name_string() const
 	return m_name_string;
 }
 
-size_t PadHandlerBase::max_devices() const
+usz PadHandlerBase::max_devices() const
 {
 	return m_max_devices;
 }
@@ -542,6 +542,7 @@ std::array<u32, PadHandlerBase::button::button_count> PadHandlerBase::get_mapped
 	mapping[button::rs_right] = FindKeyCode(button_list, profile->rs_right);
 	mapping[button::rs_down]  = FindKeyCode(button_list, profile->rs_down);
 	mapping[button::rs_up]    = FindKeyCode(button_list, profile->rs_up);
+	mapping[button::ps]       = FindKeyCode(button_list, profile->ps);
 
 	return mapping;
 }
@@ -614,7 +615,7 @@ void PadHandlerBase::get_mapping(const std::shared_ptr<PadDevice>& device, const
 
 void PadHandlerBase::ThreadProc()
 {
-	for (size_t i = 0; i < bindings.size(); ++i)
+	for (usz i = 0; i < bindings.size(); ++i)
 	{
 		auto device = bindings[i].first;
 		auto pad    = bindings[i].second;

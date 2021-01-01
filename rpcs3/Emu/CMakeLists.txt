@@ -33,18 +33,17 @@ target_include_directories(rpcs3_emu
 # Utilities
 target_sources(rpcs3_emu PRIVATE
 	../util/atomic.cpp
-	../util/atomic2.cpp
-	../util/shared_cptr.cpp
 	../util/fixed_typemap.cpp
 	../util/logs.cpp
 	../util/yaml.cpp
 	../util/cereal.cpp
 	../util/vm_native.cpp
+	../util/dyn_lib.cpp
+	../util/sysinfo.cpp
 	../../Utilities/bin_patch.cpp
 	../../Utilities/cheat_info.cpp
 	../../Utilities/cond.cpp
 	../../Utilities/Config.cpp
-	../../Utilities/dynamic_library.cpp
 	../../Utilities/File.cpp
 	../../Utilities/JIT.cpp
 	../../Utilities/LUrlParser.cpp
@@ -52,7 +51,6 @@ target_sources(rpcs3_emu PRIVATE
 	../../Utilities/rXml.cpp
 	../../Utilities/sema.cpp
 	../../Utilities/StrFmt.cpp
-	../../Utilities/sysinfo.cpp
 	../../Utilities/Thread.cpp
 	../../Utilities/version.cpp
 )
@@ -360,11 +358,13 @@ target_sources(rpcs3_emu PRIVATE
 	Io/usb_device.cpp
 	Io/Skylander.cpp
 	Io/GHLtar.cpp
+	Io/Buzz.cpp
 )
 
 # Np
 target_sources(rpcs3_emu PRIVATE
 	NP/fb_helpers.cpp
+	NP/np_contexts.cpp
 	NP/np_handler.cpp
 	NP/signaling_handler.cpp
 	NP/np_structs_extra.cpp
@@ -393,6 +393,7 @@ target_sources(rpcs3_emu PRIVATE
 	RSX/rsx_utils.cpp
 	RSX/Common/BufferUtils.cpp
 	RSX/Common/FragmentProgramDecompiler.cpp
+	RSX/Common/GLSLCommon.cpp
 	RSX/Common/ProgramStateCache.cpp
 	RSX/Common/surface_store.cpp
 	RSX/Common/TextureUtils.cpp
@@ -421,17 +422,26 @@ target_sources(rpcs3_emu PRIVATE
 	RSX/GL/GLFragmentProgram.cpp
 	RSX/GL/GLGSRender.cpp
 	RSX/GL/GLHelpers.cpp
+	RSX/GL/GLPipelineCompiler.cpp
 	RSX/GL/GLPresent.cpp
 	RSX/GL/GLRenderTargets.cpp
 	RSX/GL/GLShaderInterpreter.cpp
 	RSX/GL/GLTexture.cpp
 	RSX/GL/GLVertexBuffers.cpp
 	RSX/GL/GLVertexProgram.cpp
+	RSX/GL/GLTextureCache.cpp
 	RSX/GL/OpenGL.cpp
 )
 
 if(TARGET 3rdparty_vulkan)
 	target_sources(rpcs3_emu PRIVATE
+		RSX/VK/vkutils/chip_class.cpp
+		RSX/VK/vkutils/fence.cpp
+		RSX/VK/vkutils/mem_allocator.cpp
+		RSX/VK/vkutils/memory_block.cpp
+		RSX/VK/vkutils/physical_device.cpp
+		RSX/VK/vkutils/sampler.cpp
+		RSX/VK/vkutils/shared.cpp
 		RSX/VK/VKCommandStream.cpp
 		RSX/VK/VKCommonDecompiler.cpp
 		RSX/VK/VKDMA.cpp
@@ -442,6 +452,7 @@ if(TARGET 3rdparty_vulkan)
 		RSX/VK/VKGSRender.cpp
 		RSX/VK/VKHelpers.cpp
 		RSX/VK/VKMemAlloc.cpp
+		RSX/VK/VKPipelineCompiler.cpp
 		RSX/VK/VKPresent.cpp
 		RSX/VK/VKProgramPipeline.cpp
 		RSX/VK/VKQueryPool.cpp
@@ -452,6 +463,7 @@ if(TARGET 3rdparty_vulkan)
 		RSX/VK/VKTexture.cpp
 		RSX/VK/VKVertexBuffers.cpp
 		RSX/VK/VKVertexProgram.cpp
+		RSX/VK/VKTextureCache.cpp
 	)
 endif()
 
