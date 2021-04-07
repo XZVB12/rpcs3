@@ -95,8 +95,8 @@ namespace gui
 	}
 
 	const QString Settings = "CurrentSettings";
-	const QString Default  = "default";
-	const QString None     = "none";
+	const QString DefaultStylesheet = "default";
+	const QString NoStylesheet = "none";
 
 	const QString main_window  = "main_window";
 	const QString game_list    = "GameList";
@@ -121,7 +121,7 @@ namespace gui
 	const gui_save ib_show_welcome = gui_save(main_window, "infoBoxEnabledWelcome",    true);
 	const gui_save ib_confirm_exit = gui_save(main_window, "confirmationBoxExitGame",  true);
 	const gui_save ib_confirm_boot = gui_save(main_window, "confirmationBoxBootGame",  true);
-	const gui_save ib_confirm_fw   = gui_save(main_window, "confirmationMissingFW",    true);
+	const gui_save ib_obsolete_cfg = gui_save(main_window, "confirmationObsoleteCfg",  true);
 
 	const gui_save fd_install_pkg  = gui_save(main_window, "lastExplorePathPKG",  "");
 	const gui_save fd_install_pup  = gui_save(main_window, "lastExplorePathPUP",  "");
@@ -129,6 +129,9 @@ namespace gui
 	const gui_save fd_boot_game    = gui_save(main_window, "lastExplorePathGAME", "");
 	const gui_save fd_decrypt_sprx = gui_save(main_window, "lastExplorePathSPRX", "");
 	const gui_save fd_cg_disasm    = gui_save(main_window, "lastExplorePathCGD",  "");
+	const gui_save fd_log_viewer   = gui_save(main_window, "lastExplorePathLOG",  "");
+	const gui_save fd_ext_mself    = gui_save(main_window, "lastExplorePathExMSELF",  "");
+	const gui_save fd_ext_tar      = gui_save(main_window, "lastExplorePathExTAR",  "");
 
 	const gui_save mw_debugger         = gui_save(main_window, "debuggerVisible",  false);
 	const gui_save mw_logger           = gui_save(main_window, "loggerVisible",    true);
@@ -162,6 +165,7 @@ namespace gui
 	const gui_save gl_show_hidden  = gui_save(game_list, "show_hidden",  false);
 	const gui_save gl_hidden_list  = gui_save(game_list, "hidden_list",  QStringList());
 	const gui_save gl_draw_compat  = gui_save(game_list, "draw_compat",  false);
+	const gui_save gl_custom_icon  = gui_save(game_list, "custom_icon",  true);
 
 	const gui_save fs_emulator_dir_list = gui_save(fs, "emulator_dir_list", QStringList());
 	const gui_save fs_dev_hdd0_list     = gui_save(fs, "dev_hdd0_list",     QStringList());
@@ -171,6 +175,7 @@ namespace gui
 
 	const gui_save l_tty       = gui_save(logger, "TTY",       true);
 	const gui_save l_level     = gui_save(logger, "level",     static_cast<uint>(logs::level::success));
+	const gui_save l_prefix    = gui_save(logger, "prefix_on", false);
 	const gui_save l_stack     = gui_save(logger, "stack",     true);
 	const gui_save l_stack_tty = gui_save(logger, "TTY_stack", false);
 	const gui_save l_limit     = gui_save(logger, "limit",     1000);
@@ -183,7 +188,7 @@ namespace gui
 	const gui_save rsx_states   = gui_save(rsx, "states",   QVariantMap());
 
 	const gui_save m_currentConfig     = gui_save(meta, "currentConfig",     Settings);
-	const gui_save m_currentStylesheet = gui_save(meta, "currentStylesheet", Default);
+	const gui_save m_currentStylesheet = gui_save(meta, "currentStylesheet", DefaultStylesheet);
 	const gui_save m_saveNotes         = gui_save(meta, "saveNotes",         QVariantMap()); // Deprecated
 	const gui_save m_showDebugTab      = gui_save(meta, "showDebugTab",      false);
 	const gui_save m_enableUIColors    = gui_save(meta, "enableUIColors",    false);
@@ -253,7 +258,6 @@ public:
 	bool GetGamelistColVisibility(int col);
 	QColor GetCustomColor(int col);
 	QStringList GetConfigEntries();
-	QString GetCurrentStylesheetPath();
 	QStringList GetStylesheetEntries();
 	QStringList GetGameListCategoryFilters();
 

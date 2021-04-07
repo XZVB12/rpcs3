@@ -33,6 +33,8 @@ private:
 	void UpdateProgress(int progress, bool disable = false);
 #endif
 
+	QRect m_initial_geometry;
+
 	std::shared_ptr<gui_settings> m_gui_settings;
 	QTimer m_mousehide_timer;
 
@@ -45,9 +47,10 @@ private:
 	bool m_show_mouse_in_fullscreen = false;
 	bool m_hide_mouse_after_idletime = false;
 	u32 m_hide_mouse_idletime = 2000; // ms
+	bool m_flip_showed_frame = false;
 
 public:
-	gs_frame(const QRect& geometry, const QIcon& appIcon, const std::shared_ptr<gui_settings>& gui_settings);
+	explicit gs_frame(QScreen* screen, const QRect& geometry, const QIcon& appIcon, const std::shared_ptr<gui_settings>& gui_settings);
 	~gs_frame();
 
 	draw_context_t make_context() override;
@@ -57,6 +60,7 @@ public:
 
 	// taskbar progress
 	void progress_reset(bool reset_limit = false);
+	void progress_set_value(int value);
 	void progress_increment(int delta);
 	void progress_set_limit(int limit);
 

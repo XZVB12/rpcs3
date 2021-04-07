@@ -37,7 +37,7 @@ class patch_manager_dialog : public QDialog
 	const QString tr_all_versions = tr("All versions");
 
 public:
-	explicit patch_manager_dialog(std::shared_ptr<gui_settings> gui_settings, std::unordered_map<std::string, std::set<std::string>> games, const std::string& search_term, QWidget* parent = nullptr);
+	explicit patch_manager_dialog(std::shared_ptr<gui_settings> gui_settings, std::unordered_map<std::string, std::set<std::string>> games, const std::string& title_id, const std::string& version, QWidget* parent = nullptr);
 	~patch_manager_dialog();
 
 	int exec() override;
@@ -47,7 +47,6 @@ private Q_SLOTS:
 	void handle_item_selected(QTreeWidgetItem *current, QTreeWidgetItem *previous);
 	void handle_item_changed(QTreeWidgetItem *item, int column);
 	void handle_custom_context_menu_requested(const QPoint& pos);
-	void handle_legacy_patches_enabled(int state);
 	void handle_show_owned_games_only(int state);
 
 private:
@@ -62,11 +61,13 @@ private:
 
 	std::shared_ptr<gui_settings> m_gui_settings;
 
+	bool m_expand_current_match = false;
+	QString m_search_version;
+
 	std::unordered_map<std::string, std::set<std::string>> m_owned_games;
 	bool m_show_owned_games_only = false;
 
 	patch_engine::patch_map m_map;
-	bool m_legacy_patches_enabled = false;
 
 	downloader* m_downloader = nullptr;
 

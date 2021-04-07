@@ -12,9 +12,7 @@
 #include "rsx_vertex_data.h"
 #include "rsx_utils.h"
 #include "Utilities/geometry.h"
-
-extern u64 get_system_time();
-extern bool is_primitive_disjointed(rsx::primitive_type);
+#include "Emu/Cell/timers.hpp"
 
 namespace rsx
 {
@@ -297,21 +295,7 @@ namespace rsx
 			return count;
 		}
 
-		void reset(rsx::primitive_type type)
-		{
-			current_range_index = ~0u;
-			last_execution_barrier_index = 0;
-
-			command = draw_command::none;
-			primitive = type;
-			primitive_barrier_enable = false;
-
-			draw_command_ranges.clear();
-			draw_command_barriers.clear();
-			inline_vertex_array.clear();
-
-			is_disjoint_primitive = is_primitive_disjointed(primitive);
-		}
+		void reset(rsx::primitive_type type);
 
 		void begin()
 		{
@@ -491,12 +475,21 @@ namespace rsx
 			return decoded_type<opcode>(register_value);
 		}
 
-		rsx_state &operator=(const rsx_state& in)
+		rsx_state& operator=(const rsx_state& in)
 		{
 			registers = in.registers;
 			transform_program = in.transform_program;
 			transform_constants = in.transform_constants;
 			register_vertex_info = in.register_vertex_info;
+			return *this;
+		}
+
+		rsx_state& operator=(rsx_state&& in)
+		{
+			registers = std::move(in.registers);
+			transform_program = std::move(in.transform_program);
+			transform_constants = std::move(in.transform_constants);
+			register_vertex_info = std::move(in.register_vertex_info);
 			return *this;
 		}
 
@@ -537,11 +530,23 @@ namespace rsx
 		}
 
 	public:
-		rsx_state() :
-			fragment_textures(fill_array<fragment_texture>(registers, std::make_index_sequence<16>())),
-			vertex_textures(fill_array<vertex_texture>(registers, std::make_index_sequence<4>())),
-			vertex_arrays_info(fill_array<data_array_format_info>(registers, std::make_index_sequence<16>()))
+		rsx_state()
+			: fragment_textures(fill_array<fragment_texture>(registers, std::make_index_sequence<16>()))
+			, vertex_textures(fill_array<vertex_texture>(registers, std::make_index_sequence<4>()))
+			, vertex_arrays_info(fill_array<data_array_format_info>(registers, std::make_index_sequence<16>()))
 		{
+		}
+
+		rsx_state(const rsx_state& other)
+			: rsx_state()
+		{
+			this->operator=(other);
+		}
+
+		rsx_state(rsx_state&& other)
+			: rsx_state()
+		{
+			this->operator=(std::move(other));
 		}
 
 		~rsx_state() = default;

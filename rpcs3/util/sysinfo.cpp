@@ -242,24 +242,35 @@ std::string utils::get_system_info()
 std::string utils::get_firmware_version()
 {
 	const std::string file_path = g_cfg.vfs.get_dev_flash() + "vsh/etc/version.txt";
-	if (fs::is_file(file_path))
+	if (fs::file version_file{file_path})
 	{
-		const fs::file version_file = fs::file(file_path);
-		std::string version = version_file.to_string();
+		const std::string version_str = version_file.to_string();
+		std::string_view version = version_str;
 
 		// Extract version
 		const usz start = version.find_first_of(':') + 1;
 		const usz end = version.find_first_of(':', start);
+
+		if (!start || end == umax)
+		{
+			return {};
+		}
+
 		version = version.substr(start, end - start);
 
 		// Trim version
 		const usz trim_start = version.find_first_not_of('0');
 		const usz trim_end = version.find_last_not_of('0');
-		version = version.substr(trim_start, trim_end);
 
-		return version;
+		if (trim_start == umax)
+		{
+			return {};
+		}
+
+		return std::string(version.substr(trim_start, trim_end));
 	}
-	return "";
+
+	return {};
 }
 
 std::string utils::get_OS_version()
@@ -347,7 +358,7 @@ ullong utils::get_tsc_freq()
 		constexpr int samples = 40;
 		ullong rdtsc_data[samples];
 		ullong timer_data[samples];
-		ullong error_data[samples];
+		[[maybe_unused]] ullong error_data[samples];
 
 		// Narrow thread affinity to a single core
 		const u64 old_aff = thread_ctrl::get_thread_affinity_mask();
@@ -409,11 +420,71 @@ u64 utils::get_total_memory()
 
 u32 utils::get_thread_count()
 {
+	static const u32 g_count = []()
+	{
 #ifdef _WIN32
-	::SYSTEM_INFO sysInfo;
-	::GetNativeSystemInfo(&sysInfo);
-	return sysInfo.dwNumberOfProcessors;
+		::SYSTEM_INFO sysInfo;
+		::GetNativeSystemInfo(&sysInfo);
+		return sysInfo.dwNumberOfProcessors;
 #else
-	return ::sysconf(_SC_NPROCESSORS_ONLN);
+		return ::sysconf(_SC_NPROCESSORS_ONLN);
 #endif
+	}();
+
+	return g_count;
+}
+
+u32 utils::get_cpu_family()
+{
+	static const u32 g_value = []()
+	{
+		const u32 reg_value = get_cpuid(0x00000001, 0)[0]; // Processor feature info
+		const u32 base_value = (reg_value >> 8) & 0xF;
+
+		if (base_value == 0xF) [[likely]]
+		{
+			const u32 extended_value = (reg_value >> 20) & 0xFF;
+			return base_value + extended_value;
+		}
+		else
+		{
+			return base_value;
+		}
+	}();
+
+	return g_value;
+}
+
+u32 utils::get_cpu_model()
+{
+	static const u32 g_value = []()
+	{
+		const u32 reg_value = get_cpuid(0x00000001, 0)[0]; // Processor feature info
+		const u32 base_value = (reg_value >> 4) & 0xF;
+
+		if (const auto base_family_id = (reg_value >> 8) & 0xF;
+			base_family_id == 0x6 || base_family_id == 0xF) [[likely]]
+		{
+			const u32 extended_value = (reg_value >> 16) & 0xF;
+			return base_value + (extended_value << 4);
+		}
+		else
+		{
+			return base_value;
+		}
+	}();
+
+	return g_value;
+}
+
+namespace utils
+{
+	extern const u64 main_tid = []() -> u64
+	{
+	#ifdef _WIN32
+		return GetCurrentThreadId();
+	#else
+		return reinterpret_cast<u64>(pthread_self());
+	#endif
+	}();
 }

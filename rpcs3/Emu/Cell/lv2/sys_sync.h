@@ -5,6 +5,7 @@
 
 #include "Emu/CPU/CPUThread.h"
 #include "Emu/Cell/ErrorCodes.h"
+#include "Emu/Cell/timers.hpp"
 #include "Emu/IdManager.h"
 #include "Emu/IPC.h"
 #include "Emu/system_config.h"
@@ -304,12 +305,26 @@ public:
 		// Clamp
 		usec = std::min<u64>(usec, max_timeout);
 
-		extern u64 get_system_time();
-
 		u64 passed = 0;
 		u64 remaining;
 
 		const u64 start_time = get_system_time();
+
+		auto wait_for = [cpu](u64 timeout)
+		{
+			atomic_bs_t<cpu_flag> dummy{};
+			auto& state = cpu ? cpu->state : dummy;
+			const auto old = +state;
+
+			if (old & cpu_flag::signal)
+			{
+				return true;
+			}
+
+			thread_ctrl::wait_on(state, old, timeout);
+			return false;
+		};
+
 		while (usec >= passed)
 		{
 			remaining = usec - passed;
@@ -322,10 +337,10 @@ public:
 			constexpr u64 host_min_quantum = 500;
 #endif
 			// TODO: Tune for other non windows operating sytems
-
+			bool escape = false;
 			if (g_cfg.core.sleep_timers_accuracy < (IsUsleep ? sleep_timers_accuracy_level::_usleep : sleep_timers_accuracy_level::_all_timers))
 			{
-				thread_ctrl::wait_for(remaining, !IsUsleep);
+				escape = wait_for(remaining);
 			}
 			else
 			{
@@ -333,10 +348,10 @@ public:
 				{
 #ifdef __linux__
 					// Do not wait for the last quantum to avoid loss of accuracy
-					thread_ctrl::wait_for(remaining - ((remaining % host_min_quantum) + host_min_quantum), !IsUsleep);
+					escape = wait_for(remaining - ((remaining % host_min_quantum) + host_min_quantum));
 #else
 					// Wait on multiple of min quantum for large durations to avoid overloading low thread cpus
-					thread_ctrl::wait_for(remaining - (remaining % host_min_quantum), !IsUsleep);
+					escape = wait_for(remaining - (remaining % host_min_quantum));
 #endif
 				}
 				else
@@ -346,12 +361,17 @@ public:
 				}
 			}
 
+			if (auto cpu0 = get_current_cpu_thread(); cpu0 && cpu0->is_stopped())
+			{
+				return false;
+			}
+
 			if (thread_ctrl::state() == thread_state::aborting)
 			{
 				return false;
 			}
 
-			if (cpu && cpu->state & cpu_flag::signal)
+			if (escape)
 			{
 				return false;
 			}

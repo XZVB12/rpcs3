@@ -6,18 +6,26 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <set>
 
-u64 get_system_time();
-u64 get_guest_system_time();
+#include "Emu/Cell/timers.hpp"
+
+struct progress_dialog_workaround
+{
+	// WORKAROUND:
+	// We don't want to show the native dialog during gameplay.
+	// This can currently interfere with cell dialogs.
+	atomic_t<bool> skip_the_progress_dialog = false;
+};
 
 enum class localized_string_id;
 enum class video_renderer;
 
-enum class system_state
+enum class system_state : u32
 {
 	running,
-	paused,
 	stopped,
+	paused,
 	ready,
 };
 
@@ -45,7 +53,7 @@ struct EmuCallbacks
 	std::function<void()> on_ready;
 	std::function<bool()> on_missing_fw;
 	std::function<bool(bool, std::function<void()>)> try_to_quit; // (force_quit, on_exit) Try to close RPCS3
-	std::function<void(s32, s32)> handle_taskbar_progress; // (type, value) type: 0 for reset, 1 for increment, 2 for set_limit
+	std::function<void(s32, s32)> handle_taskbar_progress; // (type, value) type: 0 for reset, 1 for increment, 2 for set_limit, 3 for set_value
 	std::function<void()> init_kb_handler;
 	std::function<void()> init_mouse_handler;
 	std::function<void(std::string_view title_id)> init_pad_handler;
@@ -68,6 +76,7 @@ class Emulator final
 
 	atomic_t<u64> m_pause_start_time{0}; // set when paused
 	atomic_t<u64> m_pause_amend_time{0}; // increased when resumed
+	atomic_t<u64> m_stop_ctr{0}; // Increments when emulation is stopped
 
 	video_renderer m_default_renderer;
 	std::string m_default_graphics_adapter;
@@ -108,9 +117,22 @@ public:
 	}
 
 	// Call from the GUI thread
-	void CallAfter(std::function<void()>&& func) const
+	void CallAfter(std::function<void()>&& func, bool track_emu_state = true) const
 	{
-		return m_cb.call_after(std::move(func));
+		if (!track_emu_state)
+		{
+			return m_cb.call_after(std::move(func));
+		}
+
+		std::function<void()> final_func = [this, before = IsStopped(), count = +m_stop_ctr, func = std::move(func)]
+		{
+			if (count == m_stop_ctr && before == IsStopped())
+			{
+				func();
+			}
+		};
+
+		return m_cb.call_after(std::move(final_func));
 	}
 
 	/** Set emulator mode to running unconditionnaly.
@@ -121,7 +143,7 @@ public:
 		m_state = system_state::running;
 	}
 
-	void Init();
+	void Init(bool add_only = false);
 
 	std::vector<std::string> argv;
 	std::vector<std::string> envp;
@@ -177,14 +199,16 @@ public:
 	}
 
 	// u32 for cell.
-	const u32 GetUsrId() const
+	u32 GetUsrId() const
 	{
 		return m_usrid;
 	}
 
-	const bool SetUsr(const std::string& user);
+	static u32 CheckUsr(const std::string& user);
 
-	const std::string GetBackgroundPicturePath() const;
+	void SetUsr(const std::string& user);
+
+	std::string GetBackgroundPicturePath() const;
 
 	u64 GetPauseTime()
 	{
@@ -221,9 +245,10 @@ public:
 	void Stop(bool restart = false);
 	void Restart() { Stop(true); }
 	bool Quit(bool force_quit);
+	void CleanUp();
 
 	bool IsRunning() const { return m_state == system_state::running; }
-	bool IsPaused()  const { return m_state == system_state::paused; }
+	bool IsPaused()  const { return m_state >= system_state::paused; } // ready is also considered paused by this function
 	bool IsStopped() const { return m_state == system_state::stopped; }
 	bool IsReady()   const { return m_state == system_state::ready; }
 	auto GetStatus() const { return m_state.load(); }
@@ -241,6 +266,19 @@ public:
 
 	void ConfigureLogs();
 	void ConfigurePPUCache();
+
+	std::set<std::string> GetGameDirs() const;
+
+	u64 GetEmulationCounter() const
+	{
+		return m_stop_ctr;
+	}
+
+	void WaitEmulationCounter(u64 old = -1) const
+	{
+		if (old == umax) old = m_stop_ctr; // Use current if not specified
+		if (m_stop_ctr == old) m_stop_ctr.wait(old);
+	}
 
 private:
 	void LimitCacheSize();

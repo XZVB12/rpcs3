@@ -38,8 +38,13 @@ public:
 		m_use_cli_style = use_cli_style;
 	}
 
+	void SetWithCliBoot(bool with_cli_boot = false)
+	{
+		m_with_cli_boot = with_cli_boot;
+	}
+
 	/** Call this method before calling app.exec */
-	void Init() override;
+	bool Init() override;
 
 	std::unique_ptr<gs_frame> get_gs_frame();
 
@@ -75,9 +80,10 @@ private:
 
 	bool m_show_gui = true;
 	bool m_use_cli_style = false;
+	bool m_with_cli_boot = false;
 
 private Q_SLOTS:
-	void OnChangeStyleSheetRequest(const QString& path);
+	void OnChangeStyleSheetRequest();
 	void OnEmuSettingsChange();
 
 Q_SIGNALS:

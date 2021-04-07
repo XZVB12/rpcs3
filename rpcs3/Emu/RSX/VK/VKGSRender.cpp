@@ -1,12 +1,19 @@
 #include "stdafx.h"
 #include "../Overlays/overlay_shader_compile_notification.h"
 #include "../Overlays/Shaders/shader_loading_dialog_native.h"
-#include "VKGSRender.h"
+
+#include "VKAsyncScheduler.h"
+#include "VKCommandStream.h"
 #include "VKCommonDecompiler.h"
 #include "VKCompute.h"
+#include "VKGSRender.h"
+#include "VKHelpers.h"
 #include "VKRenderPass.h"
 #include "VKResourceManager.h"
-#include "VKCommandStream.h"
+
+#include "vkutils/buffer_object.h"
+#include "vkutils/scratch.h"
+
 #include "Emu/RSX/rsx_methods.h"
 #include "Emu/Memory/vm_locking.h"
 
@@ -26,13 +33,13 @@ namespace vk
 		switch (color_format)
 		{
 		case rsx::surface_color_format::r5g6b5:
-			return std::make_pair(VK_FORMAT_R5G6B5_UNORM_PACK16, vk::default_component_map());
+			return std::make_pair(VK_FORMAT_R5G6B5_UNORM_PACK16, vk::default_component_map);
 
 		case rsx::surface_color_format::a8r8g8b8:
-			return std::make_pair(VK_FORMAT_B8G8R8A8_UNORM, vk::default_component_map());
+			return std::make_pair(VK_FORMAT_B8G8R8A8_UNORM, vk::default_component_map);
 
 		case rsx::surface_color_format::a8b8g8r8:
-			return std::make_pair(VK_FORMAT_R8G8B8A8_UNORM, vk::default_component_map());
+			return std::make_pair(VK_FORMAT_R8G8B8A8_UNORM, vk::default_component_map);
 
 		case rsx::surface_color_format::x8b8g8r8_o8b8g8r8:
 			return std::make_pair(VK_FORMAT_R8G8B8A8_UNORM, o_rgb);
@@ -47,10 +54,10 @@ namespace vk
 			return std::make_pair(VK_FORMAT_B8G8R8A8_UNORM, o_rgb);
 
 		case rsx::surface_color_format::w16z16y16x16:
-			return std::make_pair(VK_FORMAT_R16G16B16A16_SFLOAT, vk::default_component_map());
+			return std::make_pair(VK_FORMAT_R16G16B16A16_SFLOAT, vk::default_component_map);
 
 		case rsx::surface_color_format::w32z32y32x32:
-			return std::make_pair(VK_FORMAT_R32G32B32A32_SFLOAT, vk::default_component_map());
+			return std::make_pair(VK_FORMAT_R32G32B32A32_SFLOAT, vk::default_component_map);
 
 		case rsx::surface_color_format::x1r5g5b5_o1r5g5b5:
 			return std::make_pair(VK_FORMAT_A1R5G5B5_UNORM_PACK16, o_rgb);
@@ -78,7 +85,7 @@ namespace vk
 
 		default:
 			rsx_log.error("Surface color buffer: Unsupported surface color format (0x%x)", static_cast<u32>(color_format));
-			return std::make_pair(VK_FORMAT_B8G8R8A8_UNORM, vk::default_component_map());
+			return std::make_pair(VK_FORMAT_B8G8R8A8_UNORM, vk::default_component_map);
 		}
 	}
 
@@ -322,9 +329,9 @@ u64 VKGSRender::get_cycles()
 
 VKGSRender::VKGSRender() : GSRender()
 {
-	if (m_thread_context.createInstance("RPCS3"))
+	if (m_instance.create("RPCS3"))
 	{
-		m_thread_context.makeCurrentInstance();
+		m_instance.bind();
 	}
 	else
 	{
@@ -333,7 +340,7 @@ VKGSRender::VKGSRender() : GSRender()
 		return;
 	}
 
-	std::vector<vk::physical_device>& gpus = m_thread_context.enumerateDevices();
+	std::vector<vk::physical_device>& gpus = m_instance.enumerate_devices();
 
 	//Actually confirm  that the loader found at least one compatible device
 	//This should not happen unless something is wrong with the driver setup on the target system
@@ -364,7 +371,7 @@ VKGSRender::VKGSRender() : GSRender()
 	{
 		if (gpu.get_name() == adapter_name)
 		{
-			m_swapchain.reset(m_thread_context.createSwapChain(display, gpu));
+			m_swapchain.reset(m_instance.create_swapchain(display, gpu));
 			gpu_found = true;
 			break;
 		}
@@ -372,7 +379,7 @@ VKGSRender::VKGSRender() : GSRender()
 
 	if (!gpu_found || adapter_name.empty())
 	{
-		m_swapchain.reset(m_thread_context.createSwapChain(display, gpus[0]));
+		m_swapchain.reset(m_instance.create_swapchain(display, gpus[0]));
 	}
 
 	if (!m_swapchain)
@@ -383,8 +390,6 @@ VKGSRender::VKGSRender() : GSRender()
 	}
 
 	m_device = const_cast<vk::render_device*>(&m_swapchain->get_device());
-
-	vk::set_current_thread_ctx(m_thread_context);
 	vk::set_current_renderer(m_swapchain->get_device());
 
 	m_swapchain_dims.width = m_frame->client_width();
@@ -396,7 +401,7 @@ VKGSRender::VKGSRender() : GSRender()
 	}
 
 	//create command buffer...
-	m_command_buffer_pool.create((*m_device));
+	m_command_buffer_pool.create((*m_device), m_device->get_graphics_queue_family());
 
 	for (auto &cb : m_primary_cb_list)
 	{
@@ -407,7 +412,7 @@ VKGSRender::VKGSRender() : GSRender()
 	m_current_command_buffer = &m_primary_cb_list[0];
 
 	//Create secondary command_buffer for parallel operations
-	m_secondary_command_buffer_pool.create((*m_device));
+	m_secondary_command_buffer_pool.create((*m_device), m_device->get_graphics_queue_family());
 	m_secondary_command_buffer.create(m_secondary_command_buffer_pool, true);
 	m_secondary_command_buffer.access_hint = vk::command_buffer::access_type_hint::all;
 
@@ -498,6 +503,8 @@ VKGSRender::VKGSRender() : GSRender()
 
 	m_shaders_cache = std::make_unique<vk::shader_cache>(*m_prog_buffer, "vulkan", "v1.91");
 
+	g_fxo->init<vk::async_scheduler_thread>();
+
 	open_command_buffer();
 
 	for (u32 i = 0; i < m_swapchain->get_swap_image_count(); ++i)
@@ -515,7 +522,7 @@ VKGSRender::VKGSRender() : GSRender()
 
 	m_current_frame = &frame_context_storage[0];
 
-	m_texture_cache.initialize((*m_device), m_swapchain->get_graphics_queue(),
+	m_texture_cache.initialize((*m_device), m_device->get_graphics_queue(),
 			m_texture_upload_buffer_ring_info);
 
 	vk::get_overlay_pass<vk::ui_overlay_renderer>()->init(*m_current_command_buffer, m_texture_upload_buffer_ring_info);
@@ -550,6 +557,9 @@ VKGSRender::~VKGSRender()
 		//Initialization failed
 		return;
 	}
+
+	// Globals. TODO: Refactor lifetime management
+	g_fxo->get<vk::async_scheduler_thread>().kill();
 
 	//Wait for device to finish up with resources
 	vkDeviceWaitIdle(*m_device);
@@ -639,7 +649,7 @@ VKGSRender::~VKGSRender()
 
 	//Device handles/contexts
 	m_swapchain->destroy();
-	m_thread_context.close();
+	m_instance.destroy();
 
 #if defined(HAVE_X11) && defined(HAVE_VULKAN)
 	if (m_display_handle)
@@ -654,28 +664,31 @@ bool VKGSRender::on_access_violation(u32 address, bool is_writing)
 		std::lock_guard lock(m_secondary_cb_guard);
 
 		const rsx::invalidation_cause cause = is_writing ? rsx::invalidation_cause::deferred_write : rsx::invalidation_cause::deferred_read;
-		result = std::move(m_texture_cache.invalidate_address(m_secondary_command_buffer, address, cause));
+		result = m_texture_cache.invalidate_address(m_secondary_command_buffer, address, cause);
 	}
 
-	if (!result.violation_handled)
-		return false;
-
+	if (result.invalidate_samplers)
 	{
 		std::lock_guard lock(m_sampler_mutex);
 		m_samplers_dirty.store(true);
 	}
 
+	if (!result.violation_handled)
+	{
+		return false;
+	}
+
 	if (result.num_flushable > 0)
 	{
-		if (g_fxo->get<rsx::dma_manager>()->is_current_thread())
+		if (g_fxo->get<rsx::dma_manager>().is_current_thread())
 		{
 			// The offloader thread cannot handle flush requests
 			ensure(!(m_queue_status & flush_queue_state::deadlock));
 
-			m_offloader_fault_range = g_fxo->get<rsx::dma_manager>()->get_fault_range(is_writing);
+			m_offloader_fault_range = g_fxo->get<rsx::dma_manager>().get_fault_range(is_writing);
 			m_offloader_fault_cause = (is_writing) ? rsx::invalidation_cause::write : rsx::invalidation_cause::read;
 
-			g_fxo->get<rsx::dma_manager>()->set_mem_fault_flag();
+			g_fxo->get<rsx::dma_manager>().set_mem_fault_flag();
 			m_queue_status |= flush_queue_state::deadlock;
 
 			// Wait for deadlock to clear
@@ -684,7 +697,7 @@ bool VKGSRender::on_access_violation(u32 address, bool is_writing)
 				utils::pause();
 			}
 
-			g_fxo->get<rsx::dma_manager>()->clear_mem_fault_flag();
+			g_fxo->get<rsx::dma_manager>().clear_mem_fault_flag();
 			return true;
 		}
 
@@ -732,16 +745,21 @@ void VKGSRender::on_invalidate_memory_range(const utils::address_range &range, r
 {
 	std::lock_guard lock(m_secondary_cb_guard);
 
-	auto data = std::move(m_texture_cache.invalidate_range(m_secondary_command_buffer, range, cause));
+	auto data = m_texture_cache.invalidate_range(m_secondary_command_buffer, range, cause);
 	AUDIT(data.empty());
 
-	if (cause == rsx::invalidation_cause::unmap && data.violation_handled)
+	if (cause == rsx::invalidation_cause::unmap)
 	{
-		m_texture_cache.purge_unreleased_sections();
+		if (data.violation_handled)
 		{
-			std::lock_guard lock(m_sampler_mutex);
-			m_samplers_dirty.store(true);
+			m_texture_cache.purge_unreleased_sections();
+			{
+				std::lock_guard lock(m_sampler_mutex);
+				m_samplers_dirty.store(true);
+			}
 		}
+
+		vk::unmap_dma(range.start, range.length());
 	}
 }
 
@@ -809,7 +827,7 @@ void VKGSRender::check_heap_status(u32 flags)
 			m_index_buffer_ring_info.is_critical() ||
 			m_raster_env_ring_info.is_critical();
 	}
-	else if (flags)
+	else
 	{
 		heap_critical = false;
 		u32 test = 1u << std::countr_zero(flags);
@@ -1056,7 +1074,7 @@ void VKGSRender::clear_surface(u32 mask)
 
 	if (!framebuffer_status_valid) return;
 
-	float depth_clear = 1.f;
+	//float depth_clear = 1.f;
 	u32   stencil_clear = 0;
 	u32   depth_stencil_mask = 0;
 
@@ -1917,21 +1935,24 @@ void VKGSRender::close_and_submit_command_buffer(vk::fence* pFence, VkSemaphore 
 
 	// Workaround for deadlock occuring during RSX offloader fault
 	// TODO: Restructure command submission infrastructure to avoid this condition
-	const bool sync_success = g_fxo->get<rsx::dma_manager>()->sync();
+	const bool sync_success = g_fxo->get<rsx::dma_manager>().sync();
 	const VkBool32 force_flush = !sync_success;
+
+	// Flush any asynchronously scheduled jobs
+	g_fxo->get<vk::async_scheduler_thread>().flush(force_flush);
 
 	if (vk::test_status_interrupt(vk::heap_dirty))
 	{
-		if (m_attrib_ring_info.dirty() ||
-			m_fragment_env_ring_info.dirty() ||
-			m_vertex_env_ring_info.dirty() ||
-			m_fragment_texture_params_ring_info.dirty() ||
-			m_vertex_layout_ring_info.dirty() ||
-			m_fragment_constants_ring_info.dirty() ||
-			m_index_buffer_ring_info.dirty() ||
-			m_transform_constants_ring_info.dirty() ||
-			m_texture_upload_buffer_ring_info.dirty() ||
-			m_raster_env_ring_info.dirty())
+		if (m_attrib_ring_info.is_dirty() ||
+			m_fragment_env_ring_info.is_dirty() ||
+			m_vertex_env_ring_info.is_dirty() ||
+			m_fragment_texture_params_ring_info.is_dirty() ||
+			m_vertex_layout_ring_info.is_dirty() ||
+			m_fragment_constants_ring_info.is_dirty() ||
+			m_index_buffer_ring_info.is_dirty() ||
+			m_transform_constants_ring_info.is_dirty() ||
+			m_texture_upload_buffer_ring_info.is_dirty() ||
+			m_raster_env_ring_info.is_dirty())
 		{
 			std::lock_guard lock(m_secondary_cb_guard);
 			m_secondary_command_buffer.begin();
@@ -1949,7 +1970,7 @@ void VKGSRender::close_and_submit_command_buffer(vk::fence* pFence, VkSemaphore 
 
 			m_secondary_command_buffer.end();
 
-			m_secondary_command_buffer.submit(m_swapchain->get_graphics_queue(),
+			m_secondary_command_buffer.submit(m_device->get_graphics_queue(),
 				VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, force_flush);
 		}
 
@@ -1960,7 +1981,7 @@ void VKGSRender::close_and_submit_command_buffer(vk::fence* pFence, VkSemaphore 
 	if (m_current_command_buffer->flags & vk::command_buffer::cb_has_conditional_render)
 	{
 		ensure(m_render_pass_open);
-		m_device->cmdEndConditionalRenderingEXT(*m_current_command_buffer);
+		m_device->_vkCmdEndConditionalRenderingEXT(*m_current_command_buffer);
 	}
 #endif
 
@@ -1981,7 +2002,7 @@ void VKGSRender::close_and_submit_command_buffer(vk::fence* pFence, VkSemaphore 
 	m_current_command_buffer->end();
 	m_current_command_buffer->tag();
 
-	m_current_command_buffer->submit(m_swapchain->get_graphics_queue(),
+	m_current_command_buffer->submit(m_device->get_graphics_queue(),
 		wait_semaphore, signal_semaphore, pFence, pipeline_stage_flags, force_flush);
 
 	if (force_flush)
@@ -2225,6 +2246,12 @@ void VKGSRender::renderctl(u32 request_code, void* args)
 		free(packet);
 		break;
 	}
+	case vk::rctrl_run_gc:
+	{
+		auto eid = reinterpret_cast<u64>(args);
+		vk::on_event_completed(eid, true);
+		break;
+	}
 	default:
 		fmt::throw_exception("Unhandled request code 0x%x", request_code);
 	}
@@ -2330,7 +2357,7 @@ void VKGSRender::get_occlusion_query_result(rsx::reports::occlusion_query_info* 
 		for (const auto occlusion_id : data.indices)
 		{
 			// We only need one hit
-			if (auto value = m_occlusion_query_manager->get_query_result(occlusion_id))
+			if (m_occlusion_query_manager->get_query_result(occlusion_id))
 			{
 				query->result = 1;
 				break;

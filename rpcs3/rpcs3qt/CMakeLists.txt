@@ -12,6 +12,7 @@ set(SRC_FILES
 	config_adapter.cpp
 	curl_handle.cpp
 	custom_dialog.cpp
+	custom_table_widget_item.cpp
 	debugger_frame.cpp
 	debugger_list.cpp
 	downloader.cpp
@@ -33,6 +34,7 @@ set(SRC_FILES
 	localized.cpp
 	localized_emu.h
 	log_frame.cpp
+	log_viewer.cpp
 	main_window.cpp
 	memory_string_searcher.cpp
 	memory_viewer_panel.cpp

@@ -52,12 +52,10 @@ bool TROPUSRLoader::LoadTableHeaders()
 
 	m_file.seek(0x30);
 	m_tableHeaders.clear();
-	m_tableHeaders.resize(m_header.tables_count);
 
-	for (TROPUSRTableHeader& tableHeader : m_tableHeaders)
+	if (!m_file.read<true>(m_tableHeaders, m_header.tables_count))
 	{
-		if (!m_file.read(tableHeader))
-			return false;
+		return false;
 	}
 
 	return true;
@@ -77,25 +75,17 @@ bool TROPUSRLoader::LoadTables()
 		if (tableHeader.type == 4u)
 		{
 			m_table4.clear();
-			m_table4.resize(tableHeader.entries_count);
 
-			for (auto& entry : m_table4)
-			{
-				if (!m_file.read(entry))
-					return false;
-			}
+			if (!m_file.read<true>(m_table4, tableHeader.entries_count))
+				return false;
 		}
 
 		if (tableHeader.type == 6u)
 		{
 			m_table6.clear();
-			m_table6.resize(tableHeader.entries_count);
 
-			for (auto& entry : m_table6)
-			{
-				if (!m_file.read(entry))
-					return false;
-			}
+			if (!m_file.read<true>(m_table6, tableHeader.entries_count))
+				return false;
 		}
 
 		// TODO: Other tables
@@ -107,30 +97,31 @@ bool TROPUSRLoader::LoadTables()
 // TODO: TROPUSRLoader::Save deletes the TROPUSR and creates it again. This is probably very slow.
 bool TROPUSRLoader::Save(const std::string& filepath)
 {
-	if (!m_file.open(vfs::get(filepath), fs::rewrite))
+	fs::pending_file temp(vfs::get(filepath));
+
+	if (!temp.file)
 	{
 		return false;
 	}
 
-	m_file.write(m_header);
+	temp.file.write(m_header);
 
 	for (const TROPUSRTableHeader& tableHeader : m_tableHeaders)
 	{
-		m_file.write(tableHeader);
+		temp.file.write(tableHeader);
 	}
 
 	for (const auto& entry : m_table4)
 	{
-		m_file.write(entry);
+		temp.file.write(entry);
 	}
 
 	for (const auto& entry : m_table6)
 	{
-		m_file.write(entry);
+		temp.file.write(entry);
 	}
 
-	m_file.release();
-	return true;
+	return temp.commit();
 }
 
 bool TROPUSRLoader::Generate(const std::string& filepath, const std::string& configpath)

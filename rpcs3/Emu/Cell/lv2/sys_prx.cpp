@@ -17,10 +17,12 @@
 
 extern std::shared_ptr<lv2_prx> ppu_load_prx(const ppu_prx_object&, const std::string&);
 extern void ppu_unload_prx(const lv2_prx& prx);
-extern void ppu_initialize(const ppu_module&);
+extern bool ppu_initialize(const ppu_module&, bool = false);
+extern void ppu_finalize(const ppu_module&);
 
 LOG_CHANNEL(sys_prx);
 
+// <string: firmware sprx, int: should hle if 1>
 extern const std::map<std::string_view, int> g_prx_list
 {
 	{ "libaacenc.sprx", 0 },
@@ -167,7 +169,7 @@ extern const std::map<std::string_view, int> g_prx_list
 	{ "libwmadec.sprx", 0 },
 };
 
-static error_code prx_load_module(const std::string& vpath, u64 flags, vm::ptr<sys_prx_load_module_option_t> pOpt, fs::file src = {})
+static error_code prx_load_module(const std::string& vpath, u64 flags, vm::ptr<sys_prx_load_module_option_t> /*pOpt*/, fs::file src = {})
 {
 	if (flags != 0)
 	{
@@ -263,9 +265,9 @@ static error_code prx_load_module(const std::string& vpath, u64 flags, vm::ptr<s
 		src = std::move(lv2_file);
 	}
 
-	u128 klic = g_fxo->get<loaded_npdrm_keys>()->devKlic.load();
+	u128 klic = g_fxo->get<loaded_npdrm_keys>().devKlic.load();
 
-	const ppu_prx_object obj = decrypt_self(std::move(src), reinterpret_cast<u8*>(&klic));
+	ppu_prx_object obj = decrypt_self(std::move(src), reinterpret_cast<u8*>(&klic));
 
 	if (obj != elf_error::ok)
 	{
@@ -273,6 +275,8 @@ static error_code prx_load_module(const std::string& vpath, u64 flags, vm::ptr<s
 	}
 
 	const auto prx = ppu_load_prx(obj, path);
+
+	obj.clear();
 
 	if (!prx)
 	{
@@ -307,6 +311,13 @@ error_code _sys_prx_load_module_by_fd(ppu_thread& ppu, s32 fd, u64 offset, u64 f
 		return CELL_EBADF;
 	}
 
+	std::lock_guard lock(file->mp->mutex);
+
+	if (!file->file)
+	{
+		return CELL_EBADF;
+	}
+
 	return prx_load_module(fmt::format("%s_x%x", file->name.data(), offset), flags, pOpt, lv2_file::make_view(file, offset));
 }
 
@@ -319,7 +330,7 @@ error_code _sys_prx_load_module_on_memcontainer_by_fd(ppu_thread& ppu, s32 fd, u
 	return _sys_prx_load_module_by_fd(ppu, fd, offset, flags, pOpt);
 }
 
-static error_code prx_load_module_list(ppu_thread& ppu, s32 count, vm::cpptr<char, u32, u64> path_list, u32 mem_ct, u64 flags, vm::ptr<sys_prx_load_module_option_t> pOpt, vm::ptr<u32> id_list)
+static error_code prx_load_module_list(ppu_thread& ppu, s32 count, vm::cpptr<char, u32, u64> path_list, u32 /*mem_ct*/, u64 flags, vm::ptr<sys_prx_load_module_option_t> pOpt, vm::ptr<u32> id_list)
 {
 	if (flags != 0)
 	{
@@ -590,16 +601,71 @@ error_code _sys_prx_unload_module(ppu_thread& ppu, u32 id, u64 flags, vm::ptr<sy
 
 	ppu_unload_prx(*prx);
 
+	ppu_finalize(*prx);
+
 	//s32 result = prx->exit ? prx->exit() : CELL_OK;
 
 	return CELL_OK;
 }
 
-error_code _sys_prx_register_module(ppu_thread& ppu)
+void ppu_manual_load_imports_exports(u32 imports_start, u32 imports_size, u32 exports_start, u32 exports_size);
+
+error_code _sys_prx_register_module(ppu_thread& ppu, vm::cptr<char> name, vm::ptr<void> opt)
 {
 	ppu.state += cpu_flag::wait;
 
-	sys_prx.todo("_sys_prx_register_module()");
+	sys_prx.todo("_sys_prx_register_module(name=%s, opt=*0x%x)", name, opt);
+
+	if (!opt)
+	{
+		return CELL_EINVAL;
+	}
+
+	sys_prx_register_module_0x30_type_1_t info{};
+
+	switch (const u64 size_struct = vm::read64(opt.addr()))
+	{
+	case 0x1c:
+	case 0x20:
+	{
+		const auto _info = vm::static_ptr_cast<sys_prx_register_module_0x20_t>(opt);
+
+		sys_prx.todo("_sys_prx_register_module(): opt size is 0x%x", size_struct);
+
+		// Rebuild info with corresponding members of old structures
+		// Weird that type is set to 0 because 0 means NO-OP in this syscall
+		info.size = 0x30;
+		info.lib_stub_size = _info->stubs_size;
+		info.lib_stub_ea = _info->stubs_ea;
+		info.error_handler = _info->error_handler;
+		info.type = 0;
+		break;
+	}
+	case 0x30:
+	{
+		std::memcpy(&info, opt.get_ptr(), sizeof(info));
+		break;
+	}
+	default: return CELL_EINVAL;
+	}
+
+	sys_prx.warning("opt: size=0x%x, type=0x%x, unk3=0x%x, unk4=0x%x, lib_entries_ea=%s, lib_entries_size=0x%x"
+		", lib_stub_ea=%s, lib_stub_size=0x%x, error_handler=%s", info.size, info.type, info.unk3, info.unk4
+		, info.lib_entries_ea, info.lib_entries_size, info.lib_stub_ea, info.lib_stub_size, info.error_handler);
+
+	if (info.type & 0x1)
+	{
+		if (g_ps3_process_info.get_cellos_appname() == "vsh.self"sv)
+		{
+			ppu_manual_load_imports_exports(info.lib_stub_ea.addr(), info.lib_stub_size, info.lib_entries_ea.addr(), info.lib_entries_size);
+		}
+		else
+		{
+			// Only VSH is allowed to load it manually
+			return not_an_error(CELL_PRX_ERROR_ELF_IS_REGISTERED);
+		}
+	}
+
 	return CELL_OK;
 }
 
@@ -773,7 +839,7 @@ error_code _sys_prx_get_module_id_by_name(ppu_thread& ppu, vm::cptr<char> name, 
 
 	//if (realName == "?") ...
 
-	return CELL_PRX_ERROR_UNKNOWN_MODULE;
+	return not_an_error(CELL_PRX_ERROR_UNKNOWN_MODULE);
 }
 
 error_code _sys_prx_get_module_id_by_address(ppu_thread& ppu, u32 addr)

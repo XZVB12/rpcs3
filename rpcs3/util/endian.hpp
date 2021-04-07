@@ -2,6 +2,11 @@
 
 #include "util/types.hpp"
 
+#ifndef _MSC_VER
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Weffc++"
+#endif
+
 namespace stx
 {
 	template <typename T, usz Align = alignof(T), usz Size = sizeof(T)>
@@ -175,9 +180,7 @@ namespace stx
 		using under = decltype(int_or_enum());
 
 	public:
-		constexpr se_t() = default;
-
-		constexpr se_t(const se_t& right) = default;
+		se_t() noexcept = default;
 
 		constexpr se_t(type value) noexcept
 			: m_data(to_data(value))
@@ -200,8 +203,6 @@ namespace stx
 		{
 			return value();
 		}
-
-		constexpr se_t& operator=(const se_t&) = default;
 
 		constexpr se_t& operator=(type value) noexcept
 		{
@@ -471,3 +472,7 @@ public:
 		}
 	};
 }
+
+#ifndef _MSC_VER
+#pragma GCC diagnostic pop
+#endif

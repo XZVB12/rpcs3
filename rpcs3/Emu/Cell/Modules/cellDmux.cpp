@@ -226,11 +226,11 @@ public:
 		DemuxerStream stream = {};
 		ElementaryStream* esALL[96]{};
 		ElementaryStream** esAVC = &esALL[0]; // AVC (max 16 minus M2V count)
-		ElementaryStream** esM2V = &esALL[16]; // M2V (max 16 minus AVC count)
-		ElementaryStream** esDATA = &esALL[32]; // user data (max 16)
+		//ElementaryStream** esM2V = &esALL[16]; // M2V (max 16 minus AVC count)
+		//ElementaryStream** esDATA = &esALL[32]; // user data (max 16)
 		ElementaryStream** esATX = &esALL[48]; // ATRAC3+ (max 16)
-		ElementaryStream** esAC3 = &esALL[64]; // AC3 (max 16)
-		ElementaryStream** esPCM = &esALL[80]; // LPCM (max 16)
+		//ElementaryStream** esAC3 = &esALL[64]; // AC3 (max 16)
+		//ElementaryStream** esPCM = &esALL[80]; // LPCM (max 16)
 
 		u32 cb_add = 0;
 
@@ -938,14 +938,14 @@ void ElementaryStream::reset()
 	raw_pos = 0;
 }
 
-void dmuxQueryAttr(u32 info_addr /* may be 0 */, vm::ptr<CellDmuxAttr> attr)
+void dmuxQueryAttr(u32 /* info_addr, may be 0 */, vm::ptr<CellDmuxAttr> attr)
 {
 	attr->demuxerVerLower = 0x280000; // TODO: check values
 	attr->demuxerVerUpper = 0x260000;
 	attr->memSize = 0x10000; // 0x3e8e6 from ps3
 }
 
-void dmuxQueryEsAttr(u32 info /* may be 0 */, vm::cptr<CellCodecEsFilterId> esFilterId, u32 esSpecificInfo, vm::ptr<CellDmuxEsAttr> attr)
+void dmuxQueryEsAttr(u32 /* info, may be 0 */, vm::cptr<CellCodecEsFilterId> esFilterId, u32 /*esSpecificInfo*/, vm::ptr<CellDmuxEsAttr> attr)
 {
 	if (esFilterId->filterIdMajor >= 0xe0)
 	{

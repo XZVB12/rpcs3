@@ -105,9 +105,9 @@ bool evdev_joystick_handler::Init()
 
 	for (const auto& node : m_pos_axis_config.get_nodes())
 	{
-		if (*static_cast<cfg::_bool*>(node.second))
+		if (*static_cast<cfg::_bool*>(node))
 		{
-			const auto name = node.first;
+			const auto name = node->get_name();
 			const int code  = libevdev_event_code_from_name(EV_ABS, name.c_str());
 			if (code < 0)
 				evdev_log.error("Failed to read axis name from %s. [code = %d] [name = %s]", m_pos_axis_config.cfg_name, code, name);
@@ -136,7 +136,7 @@ std::string evdev_joystick_handler::get_device_name(const libevdev* dev)
 
 bool evdev_joystick_handler::update_device(const std::shared_ptr<PadDevice>& device)
 {
-	auto evdev_device = std::static_pointer_cast<EvdevDevice>(device);
+	EvdevDevice* evdev_device = static_cast<EvdevDevice*>(device.get());
 	if (!evdev_device)
 		return false;
 
@@ -193,7 +193,7 @@ void evdev_joystick_handler::Close()
 {
 	for (auto& binding : bindings)
 	{
-		auto evdev_device = std::static_pointer_cast<EvdevDevice>(binding.first);
+		EvdevDevice* evdev_device = static_cast<EvdevDevice*>(binding.first.get());
 		if (evdev_device)
 		{
 			auto& dev = evdev_device->device;
@@ -424,7 +424,7 @@ void evdev_joystick_handler::get_next_button_press(const std::string& padId, con
 // https://github.com/dolphin-emu/dolphin/blob/master/Source/Core/InputCommon/ControllerInterface/evdev/evdev.cpp
 // https://github.com/reicast/reicast-emulator/blob/master/core/linux-dist/evdev.cpp
 // http://www.infradead.org/~mchehab/kernel_docs_pdf/linux-input.pdf
-void evdev_joystick_handler::SetRumble(std::shared_ptr<EvdevDevice> device, u16 large, u16 small)
+void evdev_joystick_handler::SetRumble(EvdevDevice* device, u16 large, u16 small)
 {
 	if (!device || !device->has_rumble || device->effect_id == -2)
 		return;
@@ -517,7 +517,7 @@ void evdev_joystick_handler::SetPadData(const std::string& padId, u32 largeMotor
 		return;
 	}
 
-	SetRumble(dev, largeMotor, smallMotor);
+	SetRumble(static_cast<EvdevDevice*>(dev.get()), largeMotor, smallMotor);
 }
 
 int evdev_joystick_handler::GetButtonInfo(const input_event& evt, const std::shared_ptr<EvdevDevice>& device, int& value)
@@ -656,12 +656,11 @@ int evdev_joystick_handler::add_device(const std::string& device, const std::sha
 				name == device)
 			{
 				// It's a joystick. Now let's make sure we don't already have this one.
-				auto it = std::find_if(bindings.begin(), bindings.end(), [&path](std::pair<std::shared_ptr<PadDevice>, std::shared_ptr<Pad>> binding)
+				if (std::any_of(bindings.begin(), bindings.end(), [&path](std::pair<std::shared_ptr<PadDevice>, std::shared_ptr<Pad>> binding)
 				{
-					auto device = std::static_pointer_cast<EvdevDevice>(binding.first);
+					EvdevDevice* device = static_cast<EvdevDevice*>(binding.first.get());
 					return device && path == device->path;
-				});
-				if (it != bindings.end())
+				}))
 				{
 					libevdev_free(dev);
 					close(fd);
@@ -704,7 +703,7 @@ PadHandlerBase::connection evdev_joystick_handler::update_connection(const std::
 	if (!update_device(device))
 		return connection::disconnected;
 
-	auto evdev_device = std::static_pointer_cast<EvdevDevice>(device);
+	EvdevDevice* evdev_device = static_cast<EvdevDevice*>(device.get());
 	if (!evdev_device || !evdev_device->device)
 		return connection::disconnected;
 
@@ -860,7 +859,7 @@ void evdev_joystick_handler::get_mapping(const std::shared_ptr<PadDevice>& devic
 
 void evdev_joystick_handler::apply_pad_data(const std::shared_ptr<PadDevice>& device, const std::shared_ptr<Pad>& pad)
 {
-	auto evdev_device = std::static_pointer_cast<EvdevDevice>(device);
+	EvdevDevice* evdev_device = static_cast<EvdevDevice*>(device.get());
 	if (!evdev_device)
 		return;
 
@@ -1017,7 +1016,7 @@ bool evdev_joystick_handler::check_button(const EvdevButton& b, const u32 code)
 
 bool evdev_joystick_handler::check_buttons(const std::vector<EvdevButton>& b, const u32 code)
 {
-	return std::find_if(b.begin(), b.end(), [this, code](const EvdevButton& b) { return check_button(b, code); }) != b.end();
+	return std::any_of(b.begin(), b.end(), [this, code](const EvdevButton& b) { return check_button(b, code); });
 };
 
 bool evdev_joystick_handler::get_is_left_trigger(u64 keyCode)

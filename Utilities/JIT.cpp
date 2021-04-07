@@ -7,6 +7,7 @@
 #include "mutex.h"
 #include "util/vm.hpp"
 #include "util/asm.hpp"
+#include <charconv>
 #include <immintrin.h>
 #include <zlib.h>
 
@@ -22,8 +23,10 @@ static u8* get_jit_memory()
 	static void* const s_memory2 = []() -> void*
 	{
 		void* ptr = utils::memory_reserve(0x80000000);
+#ifdef CAN_OVERCOMMIT
 		utils::memory_commit(ptr, 0x80000000);
 		utils::memory_protect(ptr, 0x40000000, utils::protection::wx);
+#endif
 		return ptr;
 	}();
 
@@ -79,7 +82,7 @@ static u8* add_jit_memory(usz size, uint align)
 
 	if (pos == umax) [[unlikely]]
 	{
-		jit_log.error("JIT: Out of memory (size=0x%x, align=0x%x, off=0x%x)", size, align, Off);
+		jit_log.error("Out of memory (size=0x%x, align=0x%x, off=0x%x)", size, align, Off);
 		return nullptr;
 	}
 
@@ -140,7 +143,7 @@ asmjit::Error jit_runtime::_add(void** dst, asmjit::CodeHolder* code) noexcept
 	return asmjit::kErrorOk;
 }
 
-asmjit::Error jit_runtime::_release(void* ptr) noexcept
+asmjit::Error jit_runtime::_release(void*) noexcept
 {
 	return asmjit::kErrorOk;
 }
@@ -215,6 +218,10 @@ asmjit::Runtime& asmjit::get_global_runtime()
 			utils::memory_commit(m_pos, size, utils::protection::wx);
 		}
 
+		custom_runtime(const custom_runtime&) = delete;
+
+		custom_runtime& operator=(const custom_runtime&) = delete;
+
 		asmjit::Error _add(void** dst, asmjit::CodeHolder* code) noexcept override
 		{
 			usz codeSize = code->getCodeSize();
@@ -228,6 +235,7 @@ asmjit::Runtime& asmjit::get_global_runtime()
 			if (!p || m_pos > m_max) [[unlikely]]
 			{
 				*dst = nullptr;
+				jit_log.fatal("Out of memory (static asmjit)");
 				return asmjit::kErrorNoVirtualMemory;
 			}
 
@@ -245,7 +253,7 @@ asmjit::Runtime& asmjit::get_global_runtime()
 			return asmjit::kErrorOk;
 		}
 
-		asmjit::Error _release(void* ptr) noexcept override
+		asmjit::Error _release(void*) noexcept override
 		{
 			return asmjit::kErrorOk;
 		}
@@ -277,6 +285,10 @@ asmjit::Runtime& asmjit::get_global_runtime()
 #pragma GCC diagnostic ignored "-Wall"
 #pragma GCC diagnostic ignored "-Wextra"
 #pragma GCC diagnostic ignored "-Wold-style-cast"
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#pragma GCC diagnostic ignored "-Wstrict-aliasing"
+#pragma GCC diagnostic ignored "-Wredundant-decls"
+#pragma GCC diagnostic ignored "-Weffc++"
 #endif
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/FormattedStream.h"
@@ -290,12 +302,6 @@ asmjit::Runtime& asmjit::get_global_runtime()
 #pragma GCC diagnostic pop
 #endif
 
-#ifdef _WIN32
-#include <Windows.h>
-#else
-#include <sys/mman.h>
-#endif
-
 const bool jit_initialize = []() -> bool
 {
 	llvm::InitializeNativeTarget();
@@ -304,6 +310,66 @@ const bool jit_initialize = []() -> bool
 	LLVMLinkInMCJIT();
 	return true;
 }();
+
+[[noreturn]] static void null(const char* name)
+{
+	fmt::throw_exception("Null function: %s", name);
+}
+
+namespace vm
+{
+	extern u8* const g_sudo_addr;
+}
+
+static shared_mutex null_mtx;
+
+static std::unordered_map<std::string, u64> null_funcs;
+
+static u64 make_null_function(const std::string& name)
+{
+	if (name.starts_with("__0x"))
+	{
+		u32 addr = -1;
+		auto res = std::from_chars(name.c_str() + 4, name.c_str() + name.size(), addr, 16);
+
+		if (res.ec == std::errc() && res.ptr == name.c_str() + name.size() && addr < 0x8000'0000)
+		{
+			// Point the garbage to reserved, non-executable memory
+			return reinterpret_cast<u64>(vm::g_sudo_addr + addr);
+		}
+	}
+
+	std::lock_guard lock(null_mtx);
+
+	if (u64& func_ptr = null_funcs[name]) [[likely]]
+	{
+		// Already exists
+		return func_ptr;
+	}
+	else
+	{
+		using namespace asmjit;
+
+		// Build a "null" function that contains its name
+		const auto func = build_function_asm<void (*)()>([&](X86Assembler& c, auto& args)
+		{
+			Label data = c.newLabel();
+			c.lea(args[0], x86::qword_ptr(data, 0));
+			c.jmp(imm_ptr(&null));
+			c.align(kAlignCode, 16);
+			c.bind(data);
+
+			// Copy function name bytes
+			for (char ch : name)
+				c.db(ch);
+			c.db(0);
+			c.align(kAlignData, 16);
+		});
+
+		func_ptr = reinterpret_cast<u64>(func);
+		return func_ptr;
+	}
+}
 
 // Simple memory manager
 struct MemoryManager1 : llvm::RTDyldMemoryManager
@@ -322,14 +388,13 @@ struct MemoryManager1 : llvm::RTDyldMemoryManager
 
 	MemoryManager1() = default;
 
+	MemoryManager1(const MemoryManager1&) = delete;
+
+	MemoryManager1& operator=(const MemoryManager1&) = delete;
+
 	~MemoryManager1() override
 	{
 		utils::memory_release(ptr, c_max_size * 2);
-	}
-
-	[[noreturn]] static void null()
-	{
-		fmt::throw_exception("Null function");
 	}
 
 	llvm::JITSymbol findSymbol(const std::string& name) override
@@ -338,7 +403,12 @@ struct MemoryManager1 : llvm::RTDyldMemoryManager
 
 		if (!addr)
 		{
-			addr = reinterpret_cast<uptr>(&null);
+			addr = make_null_function(name);
+
+			if (!addr)
+			{
+				fmt::throw_exception("Failed to link '%s'", name);
+			}
 		}
 
 		return {addr, llvm::JITSymbolFlags::Exported};
@@ -348,7 +418,7 @@ struct MemoryManager1 : llvm::RTDyldMemoryManager
 	{
 		if (align > c_page_size)
 		{
-			jit_log.fatal("JIT: Unsupported alignment (size=0x%x, align=0x%x)", size, align);
+			jit_log.fatal("Unsupported alignment (size=0x%x, align=0x%x)", size, align);
 			return nullptr;
 		}
 
@@ -357,7 +427,7 @@ struct MemoryManager1 : llvm::RTDyldMemoryManager
 
 		if ((newp - 1) / c_max_size != oldp / c_max_size)
 		{
-			jit_log.fatal("JIT: Out of memory (size=0x%x, align=0x%x)", size, align);
+			jit_log.fatal("Out of memory (size=0x%x, align=0x%x)", size, align);
 			return nullptr;
 		}
 
@@ -375,12 +445,12 @@ struct MemoryManager1 : llvm::RTDyldMemoryManager
 		return this->ptr + olda;
 	}
 
-	u8* allocateCodeSection(uptr size, uint align, uint sec_id, llvm::StringRef sec_name) override
+	u8* allocateCodeSection(uptr size, uint align, uint /*sec_id*/, llvm::StringRef /*sec_name*/) override
 	{
 		return allocate(code_ptr, size, align, utils::protection::wx);
 	}
 
-	u8* allocateDataSection(uptr size, uint align, uint sec_id, llvm::StringRef sec_name, bool is_ro) override
+	u8* allocateDataSection(uptr size, uint align, uint /*sec_id*/, llvm::StringRef /*sec_name*/, bool /*is_ro*/) override
 	{
 		return allocate(data_ptr, size, align, utils::protection::rw);
 	}
@@ -390,7 +460,7 @@ struct MemoryManager1 : llvm::RTDyldMemoryManager
 		return false;
 	}
 
-	void registerEHFrames(u8* addr, u64 load_addr, usz size) override
+	void registerEHFrames(u8*, u64, usz) override
 	{
 	}
 
@@ -408,12 +478,29 @@ struct MemoryManager2 : llvm::RTDyldMemoryManager
 	{
 	}
 
-	u8* allocateCodeSection(uptr size, uint align, uint sec_id, llvm::StringRef sec_name) override
+	llvm::JITSymbol findSymbol(const std::string& name) override
+	{
+		u64 addr = RTDyldMemoryManager::getSymbolAddress(name);
+
+		if (!addr)
+		{
+			addr = make_null_function(name);
+
+			if (!addr)
+			{
+				fmt::throw_exception("Failed to link '%s' (MM2)", name);
+			}
+		}
+
+		return {addr, llvm::JITSymbolFlags::Exported};
+	}
+
+	u8* allocateCodeSection(uptr size, uint align, uint /*sec_id*/, llvm::StringRef /*sec_name*/) override
 	{
 		return jit_runtime::alloc(size, align, true);
 	}
 
-	u8* allocateDataSection(uptr size, uint align, uint sec_id, llvm::StringRef sec_name, bool is_ro) override
+	u8* allocateDataSection(uptr size, uint align, uint /*sec_id*/, llvm::StringRef /*sec_name*/, bool /*is_ro*/) override
 	{
 		return jit_runtime::alloc(size, align, false);
 	}
@@ -423,7 +510,7 @@ struct MemoryManager2 : llvm::RTDyldMemoryManager
 		return false;
 	}
 
-	void registerEHFrames(u8* addr, u64 load_addr, usz size) override
+	void registerEHFrames(u8*, u64, usz) override
 	{
 	}
 
@@ -484,7 +571,12 @@ public:
 		}
 		}
 
-		fs::file(name, fs::rewrite).write(zbuf.get(), zsz - zs.avail_out);
+		if (!fs::write_file(name, fs::rewrite, zbuf.get(), zsz - zs.avail_out))
+		{
+				jit_log.error("LLVM: Failed to create module file: %s (%s)", name, fs::g_tls_error);
+				return;
+		}
+
 		jit_log.notice("LLVM: Created module: %s", _module->getName().data());
 	}
 
@@ -678,7 +770,7 @@ jit_compiler::jit_compiler(const std::unordered_map<std::string, u64>& _link, co
 
 		for (auto&& [name, addr] : _link)
 		{
-			m_engine->addGlobalMapping(name, addr);
+			m_engine->updateGlobalMapping(name, addr);
 		}
 	}
 

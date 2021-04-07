@@ -1,9 +1,15 @@
 #pragma once
 
 #include "util/types.hpp"
-#include "VKHelpers.h"
-#include "VKFormats.h"
 #include "../Common/surface_store.h"
+
+#include "VKFormats.h"
+#include "VKHelpers.h"
+#include "vkutils/barriers.h"
+#include "vkutils/data_heap.h"
+#include "vkutils/device.h"
+#include "vkutils/image.h"
+#include "vkutils/scratch.h"
 
 namespace vk
 {
@@ -21,7 +27,6 @@ namespace vk
 			if (!resolve_surface)
 			{
 				// Create a resolve surface
-				auto pdev = vk::get_current_renderer();
 				const auto resolve_w = width() * samples_x;
 				const auto resolve_h = height() * samples_y;
 
@@ -29,8 +34,8 @@ namespace vk
 				usage |= (this->info.usage & (VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT));
 
 				resolve_surface.reset(new vk::viewable_image(
-					*pdev,
-					pdev->get_memory_mapping().device_local,
+					*g_render_device,
+					g_render_device->get_memory_mapping().device_local,
 					VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 					VK_IMAGE_TYPE_2D,
 					format(),
@@ -242,7 +247,7 @@ namespace vk
 			if (g_cfg.video.resolution_scale_percent == 100 && spp == 1) [[likely]]
 			{
 				push_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-				vk::copy_mipmaped_image_using_buffer(cmd, this, { subres }, get_gcm_format(), is_swizzled, 1, aspect(), upload_heap, rsx_pitch);
+				vk::upload_image(cmd, this, { subres }, get_gcm_format(), is_swizzled, 1, aspect(), upload_heap, rsx_pitch, upload_contents_inline);
 				pop_layout(cmd);
 			}
 			else
@@ -267,7 +272,7 @@ namespace vk
 				}
 
 				// Load Cell data into temp buffer
-				vk::copy_mipmaped_image_using_buffer(cmd, content, { subres }, get_gcm_format(), is_swizzled, 1, aspect(), upload_heap, rsx_pitch);
+				vk::upload_image(cmd, content, { subres }, get_gcm_format(), is_swizzled, 1, aspect(), upload_heap, rsx_pitch, upload_contents_inline);
 
 				// Write into final image
 				if (content != final_dst)

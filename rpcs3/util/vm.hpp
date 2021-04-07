@@ -1,6 +1,7 @@
 #pragma once
 
 #include "util/types.hpp"
+#include "util/atomic.hpp"
 
 namespace utils
 {
@@ -46,13 +47,13 @@ namespace utils
 	class shm
 	{
 #ifdef _WIN32
-		void* m_handle;
+		void* m_handle{};
 #else
-		int m_file;
+		int m_file{};
 #endif
-		u32 m_size;
-		u32 m_flags;
-		void* m_ptr;
+		u32 m_size{};
+		u32 m_flags{};
+		atomic_t<void*> m_ptr{nullptr};
 
 	public:
 		explicit shm(u32 size, u32 flags = 0);
@@ -65,6 +66,9 @@ namespace utils
 
 		// Map shared memory
 		u8* map(void* ptr, protection prot = protection::rw) const;
+
+		// Attempt to map shared memory fix fixed pointer
+		u8* try_map(void* ptr, protection prot = protection::rw) const;
 
 		// Map shared memory over reserved memory region, which is unsafe (non-atomic) under Win32
 		u8* map_critical(void* ptr, protection prot = protection::rw);
@@ -84,7 +88,7 @@ namespace utils
 		// Get memory mapped by map_self()
 		u8* get() const
 		{
-			return reinterpret_cast<u8*>(m_ptr);
+			return static_cast<u8*>(+m_ptr);
 		}
 
 		u32 size() const

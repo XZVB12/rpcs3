@@ -313,13 +313,17 @@ private:
 	friend class atomic_wait::list;
 
 	static void	wait(const void* data, u32 size, u128 old128, u64 timeout, u128 mask128, atomic_wait::info* extension = nullptr);
-	static void notify_one(const void* data, u32 size, u128 mask128, u128 val128);
+	static void notify_one(const void* data, u32 size, u128 mask128);
 	static void notify_all(const void* data, u32 size, u128 mask128);
 
 public:
 	static void set_wait_callback(bool(*cb)(const void* data, u64 attempts, u64 stamp0));
 	static void set_notify_callback(void(*cb)(const void* data, u64 progress));
-	static bool raw_notify(const void* data, u64 thread_id = 0);
+
+	static void notify_all(const void* data)
+	{
+		notify_all(data, 0, u128(-1));
+	}
 };
 
 template <uint Max, typename... T>
@@ -348,29 +352,48 @@ struct atomic_storage
 	static constexpr int s_hle_rel = __ATOMIC_SEQ_CST;
 #endif
 
+// clang often thinks atomics are misaligned, GCC doesn't like reinterpret_cast for breaking strict aliasing
+#ifdef __clang__
+#define MAYBE_CAST(...) (reinterpret_cast<type*>(__VA_ARGS__))
+#else
+#define MAYBE_CAST(...) (__VA_ARGS__)
+#endif
+
 	static inline bool compare_exchange(T& dest, T& comp, T exch)
 	{
-		return __atomic_compare_exchange(reinterpret_cast<type*>(&dest), reinterpret_cast<type*>(&comp), reinterpret_cast<type*>(&exch), false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+		return __atomic_compare_exchange(MAYBE_CAST(&dest), MAYBE_CAST(&comp), MAYBE_CAST(&exch), false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
 	}
 
 	static inline bool compare_exchange_hle_acq(T& dest, T& comp, T exch)
 	{
 		static_assert(sizeof(T) == 4 || sizeof(T) == 8);
-		return __atomic_compare_exchange(reinterpret_cast<type*>(&dest), reinterpret_cast<type*>(&comp), reinterpret_cast<type*>(&exch), false, s_hle_ack, s_hle_ack);
+		return __atomic_compare_exchange(MAYBE_CAST(&dest), MAYBE_CAST(&comp), MAYBE_CAST(&exch), false, s_hle_ack, s_hle_ack);
 	}
 
 	static inline T load(const T& dest)
 	{
-		T result;
-		__atomic_load(reinterpret_cast<const type*>(&dest), reinterpret_cast<type*>(&result), __ATOMIC_SEQ_CST);
+#ifdef __clang__
+		type result;
+		__atomic_load(reinterpret_cast<const type*>(&dest), MAYBE_CAST(&result), __ATOMIC_SEQ_CST);
+		return std::bit_cast<T>(result);
+#else
+		alignas(sizeof(T)) T result;
+		__atomic_load(&dest, &result, __ATOMIC_SEQ_CST);
 		return result;
+#endif
 	}
 
 	static inline T observe(const T& dest)
 	{
-		T result;
-		__atomic_load(reinterpret_cast<const type*>(&dest), reinterpret_cast<type*>(&result), __ATOMIC_RELAXED);
+#ifdef __clang__
+		type result;
+		__atomic_load(reinterpret_cast<const type*>(&dest), MAYBE_CAST(&result), __ATOMIC_RELAXED);
+		return std::bit_cast<T>(result);
+#else
+		alignas(sizeof(T)) T result;
+		__atomic_load(&dest, &result, __ATOMIC_RELAXED);
 		return result;
+#endif
 	}
 
 	static inline void store(T& dest, T value)
@@ -380,13 +403,13 @@ struct atomic_storage
 
 	static inline void release(T& dest, T value)
 	{
-		__atomic_store(reinterpret_cast<type*>(&dest), reinterpret_cast<type*>(&value), __ATOMIC_RELEASE);
+		__atomic_store(MAYBE_CAST(&dest), MAYBE_CAST(&value), __ATOMIC_RELEASE);
 	}
 
 	static inline T exchange(T& dest, T value)
 	{
-		T result;
-		__atomic_exchange(reinterpret_cast<type*>(&dest), reinterpret_cast<type*>(&value), reinterpret_cast<type*>(&result), __ATOMIC_SEQ_CST);
+		alignas(sizeof(T)) T result;
+		__atomic_exchange(MAYBE_CAST(&dest), MAYBE_CAST(&value), MAYBE_CAST(&result), __ATOMIC_SEQ_CST);
 		return result;
 	}
 
@@ -479,6 +502,7 @@ struct atomic_storage
 	{
 		return atomic_storage<T>::fetch_xor(dest, value) ^ value;
 	}
+#undef MAYBE_CAST
 #endif
 
 	/* Third part: fallbacks, may be hidden by subsequent atomic_storage<> specializations */
@@ -974,7 +998,7 @@ struct atomic_storage<T, 16> : atomic_storage<T, 0>
 #else
 	static inline T load(const T& dest)
 	{
-		T r;
+		alignas(16) T r;
 #ifdef __AVX__
 		__asm__ volatile("vmovdqa %1, %0;" : "=x" (r) : "m" (dest) : "memory");
 #else
@@ -1047,16 +1071,22 @@ struct atomic_storage<T, 16> : atomic_storage<T, 0>
 
 	static inline void release(T& dest, T value)
 	{
+		u128 val = std::bit_cast<u128>(value);
 #ifdef __AVX__
-		__asm__ volatile("vmovdqa %0, %1;" :: "x" (reinterpret_cast<u128&>(value)), "m" (dest) : "memory");
+		__asm__ volatile("vmovdqa %0, %1;" :: "x" (val), "m" (dest) : "memory");
 #else
-		__asm__ volatile("movdqa %0, %1;" :: "x" (reinterpret_cast<u128&>(value)), "m" (dest) : "memory");
+		__asm__ volatile("movdqa %0, %1;" :: "x" (val), "m" (dest) : "memory");
 #endif
 	}
 #endif
 
 	// TODO
 };
+
+#ifndef _MSC_VER
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Weffc++"
+#endif
 
 // Atomic type with lock-free and standard layout guarantees (and appropriate limitations)
 template <typename T, usz Align = sizeof(T)>
@@ -1567,34 +1597,26 @@ public:
 
 	void notify_one() noexcept
 	{
-		atomic_wait_engine::notify_one(&m_data, -1, atomic_wait::default_mask<atomic_t>, 0);
+		atomic_wait_engine::notify_one(&m_data, sizeof(T), atomic_wait::default_mask<atomic_t>);
 	}
 
 	// Notify with mask, allowing to not wake up thread which doesn't wait on this mask
 	void notify_one(type mask_value) noexcept
 	{
 		const u128 mask = std::bit_cast<get_uint_t<sizeof(T)>>(mask_value);
-		atomic_wait_engine::notify_one(&m_data, -1, mask, 0);
-	}
-
-	// Notify with mask and value, allowing to not wake up thread which doesn't wait on them
-	[[deprecated("Incomplete")]] void notify_one(type mask_value, type phantom_value) noexcept
-	{
-		const u128 mask = std::bit_cast<get_uint_t<sizeof(T)>>(mask_value);
-		const u128 _new = std::bit_cast<get_uint_t<sizeof(T)>>(phantom_value);
-		atomic_wait_engine::notify_one(&m_data, sizeof(T), mask, _new);
+		atomic_wait_engine::notify_one(&m_data, sizeof(T), mask);
 	}
 
 	void notify_all() noexcept
 	{
-		atomic_wait_engine::notify_all(&m_data, -1, atomic_wait::default_mask<atomic_t>);
+		atomic_wait_engine::notify_all(&m_data, sizeof(T), atomic_wait::default_mask<atomic_t>);
 	}
 
 	// Notify all threads with mask, allowing to not wake up threads which don't wait on them
 	void notify_all(type mask_value) noexcept
 	{
 		const u128 mask = std::bit_cast<get_uint_t<sizeof(T)>>(mask_value);
-		atomic_wait_engine::notify_all(&m_data, -1, mask);
+		atomic_wait_engine::notify_all(&m_data, sizeof(T), mask);
 	}
 };
 
@@ -1693,3 +1715,7 @@ namespace atomic_wait
 	template <usz Align>
 	constexpr u128 default_mask<atomic_t<bool, Align>> = 1;
 }
+
+#ifndef _MSC_VER
+#pragma GCC diagnostic pop
+#endif

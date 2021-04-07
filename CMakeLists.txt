@@ -12,17 +12,8 @@ elseif(${CMAKE_CXX_COMPILER_ID} MATCHES "Clang")
 	endif()
 endif()
 
-option(USE_NATIVE_INSTRUCTIONS "USE_NATIVE_INSTRUCTIONS makes rpcs3 compile with -march=native, which is useful for local builds, but not good for packages." ON)
-option(WITH_LLVM "Enable usage of LLVM library" ON)
-option(BUILD_LLVM_SUBMODULE "Build LLVM from git submodule" ON)
-option(USE_ALSA "ALSA audio backend" ON)
-option(USE_PULSE "PulseAudio audio backend" ON)
-option(USE_FAUDIO "FAudio audio backend" ON)
-option(USE_LIBEVDEV "libevdev-based joystick support" ON)
-option(USE_DISCORD_RPC "Discord rich presence integration" ON)
-option(USE_SYSTEM_ZLIB "Prefer system ZLIB instead of the builtin one" ON)
-option(USE_VULKAN "Vulkan render backend" ON)
-option(USE_PRECOMPILED_HEADERS "Use precompiled headers" OFF)
+# include build options
+include(options.cmake)
 
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/rpcs3/cmake_modules")
 
@@ -36,6 +27,8 @@ endif()
 
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
 	add_definitions(-DNDEBUG)
+elseif(NOT MSVC)
+	add_definitions(-D_DEBUG)
 endif()
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)

@@ -16,6 +16,8 @@ typedef const char *HostCode;
 
 #include "cellL10n.h"
 
+#include "util/asm.hpp"
+
 LOG_CHANNEL(cellL10n);
 
 // Translate code id to code name. some codepage may has another name.
@@ -235,7 +237,7 @@ s32 _ConvertStr(s32 src_code, const void *src, s32 src_len, s32 dst_code, void *
 	if (dst != NULL)
 	{
 		usz dstLen = *dst_len;
-		usz ictd = iconv(ict, const_cast<char**>(reinterpret_cast<const char**>(&src)), &srcLen, reinterpret_cast<char**>(&dst), &dstLen);
+		usz ictd = iconv(ict, utils::bless<char*>(&src), &srcLen, utils::bless<char*>(&dst), &dstLen);
 		*dst_len -= dstLen;
 		if (ictd == umax)
 		{
@@ -258,9 +260,9 @@ s32 _ConvertStr(s32 src_code, const void *src, s32 src_len, s32 dst_code, void *
 		char buf[16];
 		while (srcLen > 0)
 		{
-			char *bufPtr = buf;
+			//char *bufPtr = buf;
 			usz bufLeft = sizeof(buf);
-			usz ictd = iconv(ict, const_cast<char**>(reinterpret_cast<const char**>(&src)), &srcLen, reinterpret_cast<char**>(&dst), &bufLeft);
+			usz ictd = iconv(ict, utils::bless<char*>(&src), &srcLen, utils::bless<char*>(&dst), &bufLeft);
 			*dst_len += sizeof(buf) - bufLeft;
 			if (ictd == umax && errno != E2BIG)
 			{
@@ -301,7 +303,7 @@ s32 _L10nConvertChar(s32 src_code, const void *src, s32 src_len, s32 dst_code, v
 s32 _L10nConvertCharNoResult(s32 src_code, const void *src, s32 src_len, s32 dst_code, vm::ptr<void> dst)
 {
 	s32 dstLen = 0x7FFFFFFF;
-	s32 result = _ConvertStr(src_code, src, src_len, dst_code, dst.get_ptr(), &dstLen, true);
+	[[maybe_unused]] s32 result = _ConvertStr(src_code, src, src_len, dst_code, dst.get_ptr(), &dstLen, true);
 	return dstLen;
 }
 
@@ -343,7 +345,7 @@ s32 JISstoUTF8s(vm::cptr<u8> src, vm::cptr<s32> src_len, vm::ptr<u8> dst, vm::pt
 
 s32 SjisZen2Han(vm::cptr<u16> src)
 {
-	cellL10n.todo("SjisZen2Han()");
+	cellL10n.todo("SjisZen2Han(src=*0x%x)", src);
 	return ConversionOK;
 }
 

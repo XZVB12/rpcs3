@@ -3,6 +3,7 @@
 
 #include "Emu/system_config.h"
 #include "Emu/IdManager.h"
+#include "Emu/Cell/timers.hpp"
 
 #include "SPUDisAsm.h"
 #include "SPUThread.h"
@@ -28,8 +29,6 @@
 extern const spu_decoder<spu_interpreter_fast> g_spu_interpreter_fast{}; // TODO: avoid
 const spu_decoder<spu_recompiler> s_spu_decoder;
 
-extern u64 get_timebased_time();
-
 std::unique_ptr<spu_recompiler_base> spu_recompiler_base::make_asmjit_recompiler()
 {
 	return std::make_unique<spu_recompiler>();
@@ -44,7 +43,7 @@ void spu_recompiler::init()
 	// Initialize if necessary
 	if (!m_spurt)
 	{
-		m_spurt = g_fxo->get<spu_runtime>();
+		m_spurt = &g_fxo->get<spu_runtime>();
 	}
 }
 
@@ -77,9 +76,9 @@ spu_function_t spu_recompiler::compile(spu_program&& _func)
 		return add_loc->compiled;
 	}
 
-	if (auto cache = g_fxo->get<spu_cache>(); *cache && g_cfg.core.spu_cache && !add_loc->cached.exchange(1))
+	if (auto& cache = g_fxo->get<spu_cache>(); cache && g_cfg.core.spu_cache && !add_loc->cached.exchange(1))
 	{
-		cache->add(func);
+		cache.add(func);
 	}
 
 	{
@@ -1305,11 +1304,11 @@ void spu_recompiler::STOP(spu_opcode_t op)
 	}
 }
 
-void spu_recompiler::LNOP(spu_opcode_t op)
+void spu_recompiler::LNOP(spu_opcode_t)
 {
 }
 
-void spu_recompiler::SYNC(spu_opcode_t op)
+void spu_recompiler::SYNC(spu_opcode_t)
 {
 	// This instruction must be used following a store instruction that modifies the instruction stream.
 	c->lock().or_(asmjit::x86::dword_ptr(asmjit::x86::rsp), 0);
@@ -1324,7 +1323,7 @@ void spu_recompiler::SYNC(spu_opcode_t op)
 	}
 }
 
-void spu_recompiler::DSYNC(spu_opcode_t op)
+void spu_recompiler::DSYNC(spu_opcode_t)
 {
 	// This instruction forces all earlier load, store, and channel instructions to complete before proceeding.
 	c->lock().or_(asmjit::x86::dword_ptr(asmjit::x86::rsp), 0);
@@ -2259,7 +2258,7 @@ void spu_recompiler::AVGB(spu_opcode_t op)
 	c->movdqa(SPU_OFF_128(gpr, op.rt), vb);
 }
 
-void spu_recompiler::MTSPR(spu_opcode_t op)
+void spu_recompiler::MTSPR(spu_opcode_t)
 {
 	// Check SPUInterpreter for notes.
 }
@@ -2581,7 +2580,7 @@ void spu_recompiler::BIHNZ(spu_opcode_t op)
 	});
 }
 
-void spu_recompiler::STOPD(spu_opcode_t op)
+void spu_recompiler::STOPD(spu_opcode_t)
 {
 	STOP(spu_opcode_t{0x3fff});
 }
@@ -2678,7 +2677,7 @@ void spu_recompiler::BISLED(spu_opcode_t op)
 	});
 }
 
-void spu_recompiler::HBR(spu_opcode_t op)
+void spu_recompiler::HBR([[maybe_unused]] spu_opcode_t op)
 {
 }
 
@@ -3186,7 +3185,7 @@ void spu_recompiler::SHLQBYI(spu_opcode_t op)
 	c->movdqa(SPU_OFF_128(gpr, op.rt), va);
 }
 
-void spu_recompiler::NOP(spu_opcode_t op)
+void spu_recompiler::NOP(spu_opcode_t)
 {
 }
 
@@ -3815,7 +3814,7 @@ void spu_recompiler::FRDS(spu_opcode_t op)
 	c->movaps(SPU_OFF_128(gpr, op.rt), va);
 }
 
-void spu_recompiler::FSCRWR(spu_opcode_t op)
+void spu_recompiler::FSCRWR(spu_opcode_t /*op*/)
 {
 	// nop (not implemented)
 }
@@ -4579,11 +4578,11 @@ void spu_recompiler::HEQI(spu_opcode_t op)
 	});
 }
 
-void spu_recompiler::HBRA(spu_opcode_t op)
+void spu_recompiler::HBRA([[maybe_unused]] spu_opcode_t op)
 {
 }
 
-void spu_recompiler::HBRR(spu_opcode_t op)
+void spu_recompiler::HBRR([[maybe_unused]] spu_opcode_t op)
 {
 }
 

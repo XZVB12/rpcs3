@@ -1,6 +1,6 @@
 #include "stdafx.h"
 #include "VKCommandStream.h"
-#include "vkutils/fence.h"
+#include "vkutils/sync.h"
 #include "Emu/IdManager.h"
 #include "Emu/system_config.h"
 #include "Emu/RSX/RSXOffload.h"
@@ -25,7 +25,7 @@ namespace vk
 		if (!flush && g_cfg.video.multithreaded_rsx)
 		{
 			auto packet = new submit_packet(queue, pfence, info);
-			g_fxo->get<rsx::dma_manager>()->backend_ctrl(rctrl_queue_submit, packet);
+			g_fxo->get<rsx::dma_manager>().backend_ctrl(rctrl_queue_submit, packet);
 		}
 		else
 		{

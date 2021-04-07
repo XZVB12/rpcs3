@@ -26,7 +26,6 @@
 #include "Emu/System.h"
 #include "Emu/system_config.h"
 #include "Emu/title.h"
-#include "Crypto/unself.h"
 
 #include <set>
 #include <unordered_set>
@@ -185,7 +184,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 	//     _____ _____  _    _   _______    _
 	//    / ____|  __ \| |  | | |__   __|  | |
 	//   | |    | |__) | |  | |    | | __ _| |__
-	//   | |    |  ___/| |  | |    | |/ _` | '_ \
+	//   | |    |  ___/| |  | |    | |/ _` | '_ ＼
 	//   | |____| |    | |__| |    | | (_| | |_) |
 	//    \_____|_|     \____/     |_|\__,_|_.__/
 
@@ -193,9 +192,6 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 
 	m_emu_settings->EnhanceCheckBox(ui->spuCache, emu_settings_type::SPUCache);
 	SubscribeTooltip(ui->spuCache, tooltips.settings.spu_cache);
-
-	m_emu_settings->EnhanceCheckBox(ui->enableScheduler, emu_settings_type::EnableThreadScheduler);
-	SubscribeTooltip(ui->enableScheduler, tooltips.settings.enable_thread_scheduler);
 
 	m_emu_settings->EnhanceCheckBox(ui->lowerSPUThrPrio, emu_settings_type::LowerSPUThreadPrio);
 	SubscribeTooltip(ui->lowerSPUThrPrio, tooltips.settings.lower_spu_thread_priority);
@@ -210,6 +206,21 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 
 	m_emu_settings->EnhanceComboBox(ui->spuBlockSize, emu_settings_type::SPUBlockSize);
 	SubscribeTooltip(ui->gb_spuBlockSize, tooltips.settings.spu_block_size);
+
+	m_emu_settings->EnhanceComboBox(ui->threadsched, emu_settings_type::ThreadSchedulerMode);
+	if (constexpr u32 min_thread_count = 12; utils::get_thread_count() < min_thread_count)
+	{
+		ui->gb_threadsched->setDisabled(true);
+		SubscribeTooltip(ui->gb_threadsched,
+			tr(
+				"Changing the thread scheduler is not supported on CPUs with less than %0 threads.\n"
+				"\n"
+				"Control how RPCS3 utilizes the threads of your system.\n"
+				"Each option heavily depends on the game and on your CPU, it's recommended to try each option to find out which performs the best."
+			).arg(min_thread_count));
+	}
+	else
+		SubscribeTooltip(ui->gb_threadsched, tooltips.settings.enable_thread_scheduler);
 
 	m_emu_settings->EnhanceComboBox(ui->preferredSPUThreads, emu_settings_type::PreferredSPUThreads, true);
 	SubscribeTooltip(ui->gb_spu_threads, tooltips.settings.preferred_spu_threads);
@@ -298,7 +309,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 	//     _____ _____  _    _   _______    _
 	//    / ____|  __ \| |  | | |__   __|  | |
 	//   | |  __| |__) | |  | |    | | __ _| |__
-	//   | | |_ |  ___/| |  | |    | |/ _` | '_ \
+	//   | | |_ |  ___/| |  | |    | |/ _` | '_ ＼
 	//   | |__| | |    | |__| |    | | (_| | |_) |
 	//    \_____|_|     \____/     |_|\__,_|_.__/
 
@@ -442,8 +453,12 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 		ui->gb_resolutionScale->setEnabled(!checked);
 		ui->gb_minimumScalableDimension->setEnabled(!checked);
 		ui->gb_anisotropicFilter->setEnabled(!checked);
+		ui->vulkansched->setEnabled(!checked);
 	};
 	connect(ui->strictModeRendering, &QCheckBox::clicked, this, onStrictRenderingMode);
+
+	m_emu_settings->EnhanceCheckBox(ui->asyncTextureStreaming, emu_settings_type::VulkanAsyncTextureUploads);
+	SubscribeTooltip(ui->asyncTextureStreaming, tooltips.settings.async_texture_streaming);
 
 	// Radio buttons
 
@@ -639,20 +654,25 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 	connect(ui->graphicsAdapterBox, &QComboBox::currentTextChanged, set_adapter);
 	connect(ui->renderBox, &QComboBox::currentTextChanged, set_renderer);
 
-	auto fix_gl_legacy = [=, this](const QString& text)
+	auto apply_renderer_specific_options = [=, this](const QString& text)
 	{
+		// OpenGL-only
 		ui->glLegacyBuffers->setEnabled(text == r_creator->OpenGL.name);
+
+		// Vulkan-only
+		ui->asyncTextureStreaming->setEnabled(text == r_creator->Vulkan.name);
+		ui->vulkansched->setEnabled(text == r_creator->Vulkan.name);
 	};
 
 	// Handle connects to disable specific checkboxes that depend on GUI state.
 	onStrictRenderingMode(ui->strictModeRendering->isChecked());
-	fix_gl_legacy(ui->renderBox->currentText()); // Init
-	connect(ui->renderBox, &QComboBox::currentTextChanged, fix_gl_legacy);
+	apply_renderer_specific_options(ui->renderBox->currentText()); // Init
+	connect(ui->renderBox, &QComboBox::currentTextChanged, apply_renderer_specific_options);
 
 	//                      _ _         _______    _
 	//       /\            | (_)       |__   __|  | |
 	//      /  \  _   _  __| |_  ___      | | __ _| |__
-	//     / /\ \| | | |/ _` | |/ _ \     | |/ _` | '_ \
+	//     / /\ \| | | |/ _` | |/ _ \     | |/ _` | '_ ＼
 	//    / ____ \ |_| | (_| | | (_) |    | | (_| | |_) |
 	//   /_/    \_\__,_|\__,_|_|\___/     |_|\__,_|_.__/
 
@@ -829,7 +849,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 	//    _____       __   ____    _______    _
 	//   |_   _|     / /  / __ \  |__   __|  | |
 	//     | |      / /  | |  | |    | | __ _| |__
-	//     | |     / /   | |  | |    | |/ _` | '_ \
+	//     | |     / /   | |  | |    | |/ _` | '_ ＼
 	//    _| |_   / /    | |__| |    | | (_| | |_) |
 	//   |_____| /_/      \____/     |_|\__,_|_.__/
 
@@ -850,10 +870,13 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 	m_emu_settings->EnhanceComboBox(ui->moveBox, emu_settings_type::Move);
 	SubscribeTooltip(ui->gb_move_handler, tooltips.settings.move);
 
+	m_emu_settings->EnhanceComboBox(ui->buzzBox, emu_settings_type::Buzz);
+	SubscribeTooltip(ui->gb_buzz_emulated, tooltips.settings.buzz);
+
 	//     _____           _                   _______    _
 	//    / ____|         | |                 |__   __|  | |
 	//   | (___  _   _ ___| |_ ___ _ __ ___      | | __ _| |__
-	//    \___ \| | | / __| __/ _ \ '_ ` _ \     | |/ _` | '_ \
+	//    \___ \| | | / __| __/ _ \ '_ ` _ \     | |/ _` | '_ ＼
 	//    ____) | |_| \__ \ ||  __/ | | | | |    | | (_| | |_) |
 	//   |_____/ \__, |___/\__\___|_| |_| |_|    |_|\__,_|_.__/
 	//            __/ |
@@ -877,7 +900,10 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 
 	m_emu_settings->EnhanceCheckBox(ui->enableCacheClearing, emu_settings_type::LimitCacheSize);
 	SubscribeTooltip(ui->gb_DiskCacheClearing, tooltips.settings.limit_cache_size);
-	connect(ui->enableCacheClearing, &QCheckBox::stateChanged, ui->maximumCacheSize, &QSlider::setEnabled);
+	if (game)
+		ui->gb_DiskCacheClearing->setDisabled(true);
+	else
+		connect(ui->enableCacheClearing, &QCheckBox::stateChanged, ui->maximumCacheSize, &QSlider::setEnabled);
 
 	// Date Time Edit Box
 	m_emu_settings->EnhanceDateTimeEdit(ui->console_time_edit, emu_settings_type::ConsoleTimeOffset, tr("dd MMM yyyy HH:mm"), true, true, 15000);
@@ -905,7 +931,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 	//    _   _      _                      _      _______    _
 	//   | \ | |    | |                    | |    |__   __|  | |
 	//   |  \| | ___| |___      _____  _ __| | __    | | __ _| |__
-	//   | . ` |/ _ \ __\ \ /\ / / _ \| '__| |/ /    | |/ _` | '_ \
+	//   | . ` |/ _ \ __\ \ /\ / / _ \| '__| |/ /    | |/ _` | '_ ＼
 	//   | |\  |  __/ |_ \ V  V / (_) | |  |   <     | | (_| | |_) |
 	//   |_| \_|\___|\__| \_/\_/ \___/|_|  |_|\_\    |_|\__,_|_.__/
 
@@ -934,7 +960,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 	//                _                               _   _______    _
 	//       /\      | |                             | | |__   __|  | |
 	//      /  \   __| |_   ____ _ _ __   ___ ___  __| |    | | __ _| |__
-	//     / /\ \ / _` \ \ / / _` | '_ \ / __/ _ \/ _` |    | |/ _` | '_ \
+	//     / /\ \ / _` \ \ / / _` | '_ \ / __/ _ \/ _` |    | |/ _` | '_ ＼
 	//    / ____ \ (_| |\ V / (_| | | | | (_|  __/ (_| |    | | (_| | |_) |
 	//   /_/    \_\__,_| \_/ \__,_|_| |_|\___\___|\__,_|    |_|\__,_|_.__/
 
@@ -977,6 +1003,9 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 
 	m_emu_settings->EnhanceComboBox(ui->sleepTimersAccuracy, emu_settings_type::SleepTimersAccuracy);
 	SubscribeTooltip(ui->gb_sleep_timers_accuracy, tooltips.settings.sleep_timers_accuracy);
+
+	m_emu_settings->EnhanceComboBox(ui->vulkansched, emu_settings_type::VulkanAsyncSchedulerDriver);
+	SubscribeTooltip(ui->gb_vulkansched, tooltips.settings.vulkan_async_scheduler);
 
 	// Sliders
 
@@ -1139,15 +1168,15 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 	//    ______                 _       _               _______    _
 	//   |  ____|               | |     | |             |__   __|  | |
 	//   | |__   _ __ ___  _   _| | __ _| |_ ___  _ __     | | __ _| |__
-	//   |  __| | '_ ` _ \| | | | |/ _` | __/ _ \| '__|    | |/ _` | '_ \
+	//   |  __| | '_ ` _ \| | | | |/ _` | __/ _ \| '__|    | |/ _` | '_ ＼
 	//   | |____| | | | | | |_| | | (_| | || (_) | |       | | (_| | |_) |
 	//   |______|_| |_| |_|\__,_|_|\__,_|\__\___/|_|       |_|\__,_|_.__/
 
 	// Comboboxes
 
-	m_emu_settings->EnhanceComboBox(ui->maxLLVMThreads, emu_settings_type::MaxLLVMThreads, true, true, std::thread::hardware_concurrency());
+	m_emu_settings->EnhanceComboBox(ui->maxLLVMThreads, emu_settings_type::MaxLLVMThreads, true, true, utils::get_thread_count());
 	SubscribeTooltip(ui->gb_max_llvm, tooltips.settings.max_llvm_threads);
-	ui->maxLLVMThreads->setItemText(ui->maxLLVMThreads->findData(0), tr("All (%1)", "Max LLVM threads").arg(std::thread::hardware_concurrency()));
+	ui->maxLLVMThreads->setItemText(ui->maxLLVMThreads->findData(0), tr("All (%1)", "Max LLVM threads").arg(utils::get_thread_count()));
 
 	m_emu_settings->EnhanceComboBox(ui->perfOverlayDetailLevel, emu_settings_type::PerfOverlayDetailLevel);
 	SubscribeTooltip(ui->perf_overlay_detail_level, tooltips.settings.perf_overlay_detail_level);
@@ -1249,6 +1278,12 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 
 	EnhanceSlider(emu_settings_type::PerfOverlayOpacity, ui->perfOverlayOpacity, ui->label_opacity, tr("Opacity: %0 %", "Performance overlay opacity"));
 	SubscribeTooltip(ui->perf_overlay_opacity, tooltips.settings.perf_overlay_opacity);
+
+	EnhanceSlider(emu_settings_type::PerfOverlayFramerateDatapoints, ui->slider_framerate_datapoints, ui->label_framerate_datapoints, tr("Framerate datapoints: %0", "Framerate graph datapoints"));
+	SubscribeTooltip(ui->perf_overlay_framerate_datapoints, tooltips.settings.perf_overlay_framerate_datapoints);
+
+	EnhanceSlider(emu_settings_type::PerfOverlayFrametimeDatapoints, ui->slider_frametime_datapoints, ui->label_frametime_datapoints, tr("Frametime datapoints: %0", "Frametime graph datapoints"));
+	SubscribeTooltip(ui->perf_overlay_frametime_datapoints, tooltips.settings.perf_overlay_frametime_datapoints);
 
 	EnhanceSlider(emu_settings_type::ShaderLoadBgDarkening, ui->shaderLoadBgDarkening, ui->label_shaderLoadBgDarkening, tr("Background darkening: %0 %", "Shader load background darkening"));
 	SubscribeTooltip(ui->shaderLoadBgDarkening, tooltips.settings.shader_load_bg_darkening);
@@ -1403,9 +1438,9 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 
 			QString glossary;
 
-			for (const auto& [format, description] : window_title_glossary)
+			for (const auto& entry : window_title_glossary)
 			{
-				glossary += format + "\t = " + description + "\n";
+				glossary += entry.first + "\t = " + entry.second + "\n";
 			}
 
 			return tr("Glossary:\n\n%0\nPreview:\n\n%1\n", "Game window title").arg(glossary).arg(game_window_title);
@@ -1446,7 +1481,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 	//     _____  _    _  _   _______    _
 	//    / ____|| |  | || | |__   __|  | |
 	//   | |  __|| |  | || |    | | __ _| |__
-	//   | | |_ || |  | || |    | |/ _` | '_ \
+	//   | | |_ || |  | || |    | |/ _` | '_ ＼
 	//   | |__| || |__| || |    | | (_| | |_) |
 	//    \_____| \____/ |_|    |_|\__,_|_.__/
 
@@ -1470,6 +1505,8 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 		SubscribeTooltip(ui->cb_show_pkg_install, tooltips.settings.show_pkg_install);
 
 		SubscribeTooltip(ui->cb_show_pup_install, tooltips.settings.show_pup_install);
+
+		SubscribeTooltip(ui->cb_show_obsolete_cfg_dialog, tooltips.settings.show_obsolete_cfg);
 
 		SubscribeTooltip(ui->gb_updates, tooltips.settings.check_update_start);
 
@@ -1549,6 +1586,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 		ui->cb_show_boot_game->setChecked(m_gui_settings->GetValue(gui::ib_confirm_boot).toBool());
 		ui->cb_show_pkg_install->setChecked(m_gui_settings->GetValue(gui::ib_pkg_success).toBool());
 		ui->cb_show_pup_install->setChecked(m_gui_settings->GetValue(gui::ib_pup_success).toBool());
+		ui->cb_show_obsolete_cfg_dialog->setChecked(m_gui_settings->GetValue(gui::ib_obsolete_cfg).toBool());
 
 		const QString updates_yes        = tr("Yes", "Updates");
 		const QString updates_background = tr("Background", "Updates");
@@ -1573,7 +1611,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 		{
 			if (reset)
 			{
-				m_current_stylesheet = gui::Default;
+				m_current_stylesheet = gui::DefaultStylesheet;
 				ui->combo_configs->setCurrentIndex(0);
 				ui->combo_stylesheets->setCurrentIndex(0);
 			}
@@ -1636,6 +1674,10 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 		{
 			m_gui_settings->SetValue(gui::ib_pup_success, val);
 		});
+		connect(ui->cb_show_obsolete_cfg_dialog, &QCheckBox::clicked, [this](bool val)
+		{
+			m_gui_settings->SetValue(gui::ib_obsolete_cfg, val);
+		});
 
 		connect(ui->cb_custom_colors, &QCheckBox::clicked, [this](bool val)
 		{
@@ -1687,7 +1729,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 	//    _____       _                   _______    _
 	//   |  __ \     | |                 |__   __|  | |
 	//   | |  | | ___| |__  _   _  __ _     | | __ _| |__
-	//   | |  | |/ _ \ '_ \| | | |/ _` |    | |/ _` | '_ \
+	//   | |  | |/ _ \ '_ \| | | |/ _` |    | |/ _` | '_ ＼
 	//   | |__| |  __/ |_) | |_| | (_| |    | | (_| | |_) |
 	//   |_____/ \___|_.__/ \__,_|\__, |    |_|\__,_|_.__/
 	//                             __/ |
@@ -1739,6 +1781,9 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 
 	m_emu_settings->EnhanceCheckBox(ui->spuDebug, emu_settings_type::SPUDebug);
 	SubscribeTooltip(ui->spuDebug, tooltips.settings.spu_debug);
+
+	m_emu_settings->EnhanceCheckBox(ui->mfcDebug, emu_settings_type::MFCDebug);
+	SubscribeTooltip(ui->mfcDebug, tooltips.settings.mfc_debug);
 
 	m_emu_settings->EnhanceCheckBox(ui->setDAZandFTZ, emu_settings_type::SetDAZandFTZ);
 	SubscribeTooltip(ui->setDAZandFTZ, tooltips.settings.set_daz_and_ftz);
@@ -1835,12 +1880,12 @@ void settings_dialog::AddStylesheets()
 {
 	ui->combo_stylesheets->clear();
 
-	ui->combo_stylesheets->addItem(tr("None", "Stylesheets"), gui::None);
-	ui->combo_stylesheets->addItem(tr("Default (Bright)", "Stylesheets"), gui::Default);
+	ui->combo_stylesheets->addItem(tr("None", "Stylesheets"), gui::NoStylesheet);
+	ui->combo_stylesheets->addItem(tr("Default (Bright)", "Stylesheets"), gui::DefaultStylesheet);
 
 	for (const QString& entry : m_gui_settings->GetStylesheetEntries())
 	{
-		if (entry != gui::Default)
+		if (entry != gui::DefaultStylesheet)
 		{
 			ui->combo_stylesheets->addItem(entry, entry);
 		}
@@ -1924,7 +1969,7 @@ void settings_dialog::OnApplyStylesheet()
 {
 	m_current_stylesheet = ui->combo_stylesheets->currentData().toString();
 	m_gui_settings->SetValue(gui::m_currentStylesheet, m_current_stylesheet);
-	Q_EMIT GuiStylesheetRequest(m_gui_settings->GetCurrentStylesheetPath());
+	Q_EMIT GuiStylesheetRequest();
 }
 
 int settings_dialog::exec()
@@ -1937,7 +1982,29 @@ int settings_dialog::exec()
 	QTimer::singleShot(0, [this]{ ui->tab_widget_settings->setCurrentIndex(m_tab_index); });
 
 	// Open a dialog if your config file contained invalid entries
-	QTimer::singleShot(10, [this] { m_emu_settings->OpenCorrectionDialog(this); });
+	QTimer::singleShot(10, [this]
+	{
+		m_emu_settings->OpenCorrectionDialog(this);
+
+		if (!m_emu_settings->ValidateSettings(false))
+		{
+			int result = QMessageBox::No;
+			m_gui_settings->ShowConfirmationBox(
+				tr("Remove obsolete settings?"),
+				tr(
+					"Your config file contains one or more obsolete entries.\n"
+					"Consider that a removal might render them invalid for other versions of RPCS3.\n"
+					"\n"
+					"Do you wish to let the program remove them for you now?\n"
+					"This change will only be final when you save the config."
+				), gui::ib_obsolete_cfg, &result, this);
+
+			if (result == QMessageBox::Yes)
+			{
+				m_emu_settings->ValidateSettings(true);
+			}
+		}
+	});
 
 	return QDialog::exec();
 }

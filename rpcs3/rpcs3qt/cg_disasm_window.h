@@ -4,6 +4,7 @@
 
 #include <QTextEdit>
 #include <QDropEvent>
+
 #include <memory>
 
 class AsmHighlighter;
@@ -16,18 +17,16 @@ class cg_disasm_window : public QWidget
 
 private Q_SLOTS:
 	void ShowContextMenu(const QPoint &pos);
+
+private:
 	void ShowDisasm();
 	bool IsValidFile(const QMimeData& md, bool save = false);
 
-private:
 	QString m_path_last;
 	QTextEdit* m_disasm_text;
 	QTextEdit* m_glsl_text;
-	QList<QUrl> m_urls;
 
-	QAction *openCgBinaryProgram;
-
-	std::shared_ptr<gui_settings> xgui_settings;
+	std::shared_ptr<gui_settings> m_gui_settings;
 
 	AsmHighlighter* sh_asm;
 	GlslHighlighter* sh_glsl;

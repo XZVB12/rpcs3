@@ -102,7 +102,7 @@ pad_settings_dialog::pad_settings_dialog(std::shared_ptr<gui_settings> gui_setti
 	connect(ui->chooseHandler, &QComboBox::currentTextChanged, this, &pad_settings_dialog::ChangeInputType);
 
 	// Combobox: Devices
-	connect(ui->chooseDevice, QOverload<int>::of(&QComboBox::currentIndexChanged), [this](int index)
+	connect(ui->chooseDevice, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index)
 	{
 		if (index < 0)
 		{
@@ -119,7 +119,7 @@ pad_settings_dialog::pad_settings_dialog(std::shared_ptr<gui_settings> gui_setti
 	});
 
 	// Combobox: Profiles
-	connect(ui->chooseProfile, &QComboBox::currentTextChanged, [this](const QString& prof)
+	connect(ui->chooseProfile, &QComboBox::currentTextChanged, this, [this](const QString& prof)
 	{
 		if (prof.isEmpty())
 		{
@@ -136,7 +136,7 @@ pad_settings_dialog::pad_settings_dialog(std::shared_ptr<gui_settings> gui_setti
 	});
 
 	// Pushbutton: Add Profile
-	connect(ui->b_addProfile, &QAbstractButton::clicked, [this]()
+	connect(ui->b_addProfile, &QAbstractButton::clicked, this, [this]()
 	{
 		const int i = ui->tabWidget->currentIndex();
 
@@ -175,7 +175,7 @@ pad_settings_dialog::pad_settings_dialog(std::shared_ptr<gui_settings> gui_setti
 
 	ui->buttonBox->button(QDialogButtonBox::Reset)->setText(tr("Filter Noise"));
 
-	connect(ui->buttonBox, &QDialogButtonBox::clicked, [this](QAbstractButton* button)
+	connect(ui->buttonBox, &QDialogButtonBox::clicked, this, [this](QAbstractButton* button)
 	{
 		if (button == ui->buttonBox->button(QDialogButtonBox::Save))
 		{
@@ -223,7 +223,7 @@ pad_settings_dialog::pad_settings_dialog(std::shared_ptr<gui_settings> gui_setti
 	SubscribeTooltips();
 
 	// Repaint controller image
-	ui->l_controller->setPixmap(gui::utils::get_colorized_pixmap(*ui->l_controller->pixmap(), QColor(), gui::utils::get_label_color("l_controller"), false, true));
+	ui->l_controller->setPixmap(gui::utils::get_colorized_pixmap(ui->l_controller->pixmap(Qt::ReturnByValue), QColor(), gui::utils::get_label_color("l_controller"), false, true));
 
 	// Show default widgets first in order to calculate the required size for the scroll area (see pad_settings_dialog::ResizeDialog)
 	ui->left_stack->setCurrentIndex(0);
@@ -258,63 +258,63 @@ pad_settings_dialog::~pad_settings_dialog()
 
 void pad_settings_dialog::InitButtons()
 {
-	m_padButtons = new QButtonGroup(this);
+	m_pad_buttons = new QButtonGroup(this);
 	m_palette = ui->b_left->palette(); // save normal palette
 
-	auto insertButton = [this](int id, QPushButton* button)
+	const auto insert_button = [this](int id, QPushButton* button)
 	{
-		m_padButtons->addButton(button, id);
+		m_pad_buttons->addButton(button, id);
 		button->installEventFilter(this);
 	};
 
-	insertButton(button_ids::id_pad_lstick_left, ui->b_lstick_left);
-	insertButton(button_ids::id_pad_lstick_down, ui->b_lstick_down);
-	insertButton(button_ids::id_pad_lstick_right, ui->b_lstick_right);
-	insertButton(button_ids::id_pad_lstick_up, ui->b_lstick_up);
+	insert_button(button_ids::id_pad_lstick_left, ui->b_lstick_left);
+	insert_button(button_ids::id_pad_lstick_down, ui->b_lstick_down);
+	insert_button(button_ids::id_pad_lstick_right, ui->b_lstick_right);
+	insert_button(button_ids::id_pad_lstick_up, ui->b_lstick_up);
 
-	insertButton(button_ids::id_pad_left, ui->b_left);
-	insertButton(button_ids::id_pad_down, ui->b_down);
-	insertButton(button_ids::id_pad_right, ui->b_right);
-	insertButton(button_ids::id_pad_up, ui->b_up);
+	insert_button(button_ids::id_pad_left, ui->b_left);
+	insert_button(button_ids::id_pad_down, ui->b_down);
+	insert_button(button_ids::id_pad_right, ui->b_right);
+	insert_button(button_ids::id_pad_up, ui->b_up);
 
-	insertButton(button_ids::id_pad_l1, ui->b_shift_l1);
-	insertButton(button_ids::id_pad_l2, ui->b_shift_l2);
-	insertButton(button_ids::id_pad_l3, ui->b_shift_l3);
+	insert_button(button_ids::id_pad_l1, ui->b_shift_l1);
+	insert_button(button_ids::id_pad_l2, ui->b_shift_l2);
+	insert_button(button_ids::id_pad_l3, ui->b_shift_l3);
 
-	insertButton(button_ids::id_pad_start, ui->b_start);
-	insertButton(button_ids::id_pad_select, ui->b_select);
-	insertButton(button_ids::id_pad_ps, ui->b_ps);
+	insert_button(button_ids::id_pad_start, ui->b_start);
+	insert_button(button_ids::id_pad_select, ui->b_select);
+	insert_button(button_ids::id_pad_ps, ui->b_ps);
 
-	insertButton(button_ids::id_pad_r1, ui->b_shift_r1);
-	insertButton(button_ids::id_pad_r2, ui->b_shift_r2);
-	insertButton(button_ids::id_pad_r3, ui->b_shift_r3);
+	insert_button(button_ids::id_pad_r1, ui->b_shift_r1);
+	insert_button(button_ids::id_pad_r2, ui->b_shift_r2);
+	insert_button(button_ids::id_pad_r3, ui->b_shift_r3);
 
-	insertButton(button_ids::id_pad_square, ui->b_square);
-	insertButton(button_ids::id_pad_cross, ui->b_cross);
-	insertButton(button_ids::id_pad_circle, ui->b_circle);
-	insertButton(button_ids::id_pad_triangle, ui->b_triangle);
+	insert_button(button_ids::id_pad_square, ui->b_square);
+	insert_button(button_ids::id_pad_cross, ui->b_cross);
+	insert_button(button_ids::id_pad_circle, ui->b_circle);
+	insert_button(button_ids::id_pad_triangle, ui->b_triangle);
 
-	insertButton(button_ids::id_pad_rstick_left, ui->b_rstick_left);
-	insertButton(button_ids::id_pad_rstick_down, ui->b_rstick_down);
-	insertButton(button_ids::id_pad_rstick_right, ui->b_rstick_right);
-	insertButton(button_ids::id_pad_rstick_up, ui->b_rstick_up);
+	insert_button(button_ids::id_pad_rstick_left, ui->b_rstick_left);
+	insert_button(button_ids::id_pad_rstick_down, ui->b_rstick_down);
+	insert_button(button_ids::id_pad_rstick_right, ui->b_rstick_right);
+	insert_button(button_ids::id_pad_rstick_up, ui->b_rstick_up);
 
-	m_padButtons->addButton(ui->b_refresh, button_ids::id_refresh);
-	m_padButtons->addButton(ui->b_addProfile, button_ids::id_add_profile);
+	m_pad_buttons->addButton(ui->b_refresh, button_ids::id_refresh);
+	m_pad_buttons->addButton(ui->b_addProfile, button_ids::id_add_profile);
 
-	connect(m_padButtons, &QButtonGroup::idClicked, this, &pad_settings_dialog::OnPadButtonClicked);
+	connect(m_pad_buttons, &QButtonGroup::idClicked, this, &pad_settings_dialog::OnPadButtonClicked);
 
-	connect(&m_timer, &QTimer::timeout, [this]()
+	connect(&m_timer, &QTimer::timeout, this, [this]()
 	{
 		if (--m_seconds <= 0)
 		{
 			ReactivateButtons();
 			return;
 		}
-		m_padButtons->button(m_button_id)->setText(tr("[ Waiting %1 ]").arg(m_seconds));
+		m_pad_buttons->button(m_button_id)->setText(tr("[ Waiting %1 ]").arg(m_seconds));
 	});
 
-	connect(ui->chb_vibration_large, &QCheckBox::clicked, [this](bool checked)
+	connect(ui->chb_vibration_large, &QCheckBox::clicked, this, [this](bool checked)
 	{
 		if (!checked)
 		{
@@ -330,7 +330,7 @@ void pad_settings_dialog::InitButtons()
 		});
 	});
 
-	connect(ui->chb_vibration_small, &QCheckBox::clicked, [this](bool checked)
+	connect(ui->chb_vibration_small, &QCheckBox::clicked, this, [this](bool checked)
 	{
 		if (!checked)
 		{
@@ -346,7 +346,7 @@ void pad_settings_dialog::InitButtons()
 		});
 	});
 
-	connect(ui->chb_vibration_switch, &QCheckBox::clicked, [this](bool checked)
+	connect(ui->chb_vibration_switch, &QCheckBox::clicked, this, [this](bool checked)
 	{
 		checked ? SetPadData(m_min_force, m_max_force)
 		        : SetPadData(m_max_force, m_min_force);
@@ -363,22 +363,23 @@ void pad_settings_dialog::InitButtons()
 		});
 	});
 
-	connect(ui->slider_stick_left, &QSlider::valueChanged, [&](int value)
+	connect(ui->slider_stick_left, &QSlider::valueChanged, this, [&](int value)
 	{
 		RepaintPreviewLabel(ui->preview_stick_left, value, ui->slider_stick_left->size().width(), m_lx, m_ly, ui->squircle_left->value(), ui->stick_multi_left->value());
 	});
 
-	connect(ui->slider_stick_right, &QSlider::valueChanged, [&](int value)
+	connect(ui->slider_stick_right, &QSlider::valueChanged, this, [&](int value)
 	{
 		RepaintPreviewLabel(ui->preview_stick_right, value, ui->slider_stick_right->size().width(), m_rx, m_ry, ui->squircle_right->value(), ui->stick_multi_right->value());
 	});
 
 	// Open LED settings
-	connect(ui->b_led_settings, &QPushButton::clicked, [this]()
+	connect(ui->b_led_settings, &QPushButton::clicked, this, [this]()
 	{
 		// Allow LED battery indication while the dialog is open
-		m_handler->SetPadData(m_device_name, 0, 0, m_handler_cfg.colorR, m_handler_cfg.colorG, m_handler_cfg.colorB, static_cast<bool>(m_handler_cfg.led_battery_indicator), m_handler_cfg.led_battery_indicator_brightness);
-		pad_led_settings_dialog dialog(m_handler_cfg.colorR, m_handler_cfg.colorG, m_handler_cfg.colorB, static_cast<bool>(m_handler_cfg.led_low_battery_blink), static_cast<bool>(m_handler_cfg.led_battery_indicator), m_handler_cfg.led_battery_indicator_brightness, this);
+		ensure(m_handler);
+		m_handler->SetPadData(m_device_name, 0, 0, m_handler_cfg.colorR, m_handler_cfg.colorG, m_handler_cfg.colorB, m_handler_cfg.led_battery_indicator.get(), m_handler_cfg.led_battery_indicator_brightness);
+		pad_led_settings_dialog dialog(this, m_handler_cfg.colorR, m_handler_cfg.colorG, m_handler_cfg.colorB, m_handler->has_rgb(), m_handler->has_battery(), m_handler_cfg.led_low_battery_blink.get(), m_handler_cfg.led_battery_indicator.get(), m_handler_cfg.led_battery_indicator_brightness);
 		connect(&dialog, &pad_led_settings_dialog::pass_led_settings, this, &pad_settings_dialog::apply_led_settings);
 		dialog.exec();
 		m_handler->SetPadData(m_device_name, 0, 0, m_handler_cfg.colorR, m_handler_cfg.colorG, m_handler_cfg.colorB, false, m_handler_cfg.led_battery_indicator_brightness);
@@ -411,10 +412,7 @@ void pad_settings_dialog::InitButtons()
 			}
 		}
 
-		if (m_enable_battery)
-		{
-			ui->pb_battery->setValue(battery_level);
-		}
+		ui->pb_battery->setValue(m_enable_battery ? battery_level : 0);
 
 		if (val <= 0)
 		{
@@ -435,14 +433,14 @@ void pad_settings_dialog::InitButtons()
 	const auto& fail_callback = [this](const std::string& pad_name)
 	{
 		SwitchPadInfo(pad_name, false);
+
 		if (m_enable_buttons)
 		{
 			SwitchButtons(false);
 		}
-		if (m_enable_battery)
-		{
-			ui->pb_battery->setValue(0);
-		}
+
+		ui->pb_battery->setValue(0);
+
 		if (m_handler->has_deadzones())
 		{
 			ui->preview_trigger_left->setValue(0);
@@ -462,7 +460,7 @@ void pad_settings_dialog::InitButtons()
 	};
 
 	// Use timer to get button input
-	connect(&m_timer_input, &QTimer::timeout, [this, callback, fail_callback]()
+	connect(&m_timer_input, &QTimer::timeout, this, [this, callback, fail_callback]()
 	{
 		const std::vector<std::string> buttons =
 		{
@@ -475,7 +473,7 @@ void pad_settings_dialog::InitButtons()
 	});
 
 	// Use timer to refresh pad connection status
-	connect(&m_timer_pad_refresh, &QTimer::timeout, [this]()
+	connect(&m_timer_pad_refresh, &QTimer::timeout, this, [this]()
 	{
 		for (int i = 0; i < ui->chooseDevice->count(); i++)
 		{
@@ -494,6 +492,7 @@ void pad_settings_dialog::InitButtons()
 
 void pad_settings_dialog::SetPadData(u32 large_motor, u32 small_motor)
 {
+	ensure(m_handler);
 	const QColor led_color(m_handler_cfg.colorR, m_handler_cfg.colorG, m_handler_cfg.colorB);
 	m_handler->SetPadData(m_device_name, large_motor, small_motor, led_color.red(), led_color.green(), led_color.blue(), static_cast<bool>(m_handler_cfg.led_battery_indicator), m_handler_cfg.led_battery_indicator_brightness);
 }
@@ -501,6 +500,7 @@ void pad_settings_dialog::SetPadData(u32 large_motor, u32 small_motor)
 // Slot to handle the data from a signal in the led settings dialog
 void pad_settings_dialog::apply_led_settings(int colorR, int colorG, int colorB, bool led_low_battery_blink, bool led_battery_indicator, int led_battery_indicator_brightness)
 {
+	ensure(m_handler);
 	m_handler_cfg.colorR.set(colorR);
 	m_handler_cfg.colorG.set(colorG);
 	m_handler_cfg.colorB.set(colorB);
@@ -597,17 +597,17 @@ void pad_settings_dialog::ReactivateButtons()
 		return;
 	}
 
-	if (m_padButtons->button(m_button_id))
+	if (m_pad_buttons->button(m_button_id))
 	{
-		m_padButtons->button(m_button_id)->setPalette(m_palette);
-		m_padButtons->button(m_button_id)->releaseMouse();
+		m_pad_buttons->button(m_button_id)->setPalette(m_palette);
+		m_pad_buttons->button(m_button_id)->releaseMouse();
 	}
 
 	m_button_id = button_ids::id_pad_begin;
 	UpdateLabels();
 	SwitchButtons(true);
 
-	for (auto but : m_padButtons->buttons())
+	for (auto but : m_pad_buttons->buttons())
 	{
 		but->setFocusPolicy(Qt::StrongFocus);
 	}
@@ -961,8 +961,6 @@ void pad_settings_dialog::UpdateLabels(bool is_reset)
 		ui->slider_stick_right->setRange(0, m_handler->thumb_max);
 		ui->slider_stick_right->setValue(m_handler_cfg.rstickdeadzone);
 
-		m_handler->SetPadData(m_device_name, 0, 0, m_handler_cfg.colorR, m_handler_cfg.colorG, m_handler_cfg.colorB, false, m_handler_cfg.led_battery_indicator_brightness);
-
 		// Update Mouse Deadzones
 		std::vector<std::string> mouse_dz_range_x = m_handler_cfg.mouse_deadzone_x.to_list();
 		ui->mouse_dz_x->setRange(std::stoi(mouse_dz_range_x.front()), std::stoi(mouse_dz_range_x.back()));
@@ -1029,7 +1027,7 @@ void pad_settings_dialog::UpdateLabels(bool is_reset)
 		}
 
 		// The button has to contain at least one character, because it would be square'ish otherwise
-		m_padButtons->button(entry.first)->setText(entry.second.text.isEmpty() ? QStringLiteral("-") : entry.second.text);
+		m_pad_buttons->button(entry.first)->setText(entry.second.text.isEmpty() ? QStringLiteral("-") : entry.second.text);
 	}
 }
 
@@ -1050,7 +1048,7 @@ void pad_settings_dialog::SwitchButtons(bool is_enabled)
 
 	for (int i = button_ids::id_pad_begin + 1; i < button_ids::id_pad_end; i++)
 	{
-		m_padButtons->button(i)->setEnabled(is_enabled);
+		m_pad_buttons->button(i)->setEnabled(is_enabled);
 	}
 }
 
@@ -1078,7 +1076,7 @@ void pad_settings_dialog::OnPadButtonClicked(int id)
 		break;
 	}
 
-	for (auto but : m_padButtons->buttons())
+	for (auto but : m_pad_buttons->buttons())
 	{
 		but->setFocusPolicy(Qt::ClickFocus);
 	}
@@ -1100,9 +1098,9 @@ void pad_settings_dialog::OnPadButtonClicked(int id)
 	m_last_pos = QCursor::pos();
 
 	m_button_id = id;
-	m_padButtons->button(m_button_id)->setText(tr("[ Waiting %1 ]").arg(MAX_SECONDS));
-	m_padButtons->button(m_button_id)->setPalette(QPalette(Qt::blue));
-	m_padButtons->button(m_button_id)->grabMouse();
+	m_pad_buttons->button(m_button_id)->setText(tr("[ Waiting %1 ]").arg(MAX_SECONDS));
+	m_pad_buttons->button(m_button_id)->setPalette(QPalette(Qt::blue));
+	m_pad_buttons->button(m_button_id)->grabMouse();
 	SwitchButtons(false); // disable all buttons, needed for using Space, Enter and other specific buttons
 	m_timer.start(1000);
 }
@@ -1122,47 +1120,38 @@ void pad_settings_dialog::OnTabChanged(int index)
 
 std::shared_ptr<PadHandlerBase> pad_settings_dialog::GetHandler(pad_handler type)
 {
-	std::shared_ptr<PadHandlerBase> ret_handler;
-
 	switch (type)
 	{
 	case pad_handler::null:
-		ret_handler = std::make_unique<NullPadHandler>();
-		break;
+		return std::make_unique<NullPadHandler>();
 	case pad_handler::keyboard:
-		ret_handler = std::make_unique<keyboard_pad_handler>();
-		break;
+		return std::make_unique<keyboard_pad_handler>();
 	case pad_handler::ds3:
-		ret_handler = std::make_unique<ds3_pad_handler>();
-		break;
+		return std::make_unique<ds3_pad_handler>();
 	case pad_handler::ds4:
-		ret_handler = std::make_unique<ds4_pad_handler>();
-		break;
+		return std::make_unique<ds4_pad_handler>();
 	case pad_handler::dualsense:
-		ret_handler = std::make_unique<dualsense_pad_handler>();
-		break;
+		return std::make_unique<dualsense_pad_handler>();
 #ifdef _WIN32
 	case pad_handler::xinput:
-		ret_handler = std::make_unique<xinput_pad_handler>();
-		break;
+		return std::make_unique<xinput_pad_handler>();
 	case pad_handler::mm:
-		ret_handler = std::make_unique<mm_joystick_handler>();
-		break;
+		return std::make_unique<mm_joystick_handler>();
 #endif
 #ifdef HAVE_LIBEVDEV
 	case pad_handler::evdev:
-		ret_handler = std::make_unique<evdev_joystick_handler>();
-		break;
+		return std::make_unique<evdev_joystick_handler>();
 #endif
 	}
 
-	return ret_handler;
+	return nullptr;
 }
 
 void pad_settings_dialog::ChangeInputType()
 {
 	bool force_enable = false; // enable configs even with disconnected devices
 	const int player = ui->tabWidget->currentIndex();
+	ensure(player >= 0);
 	const bool is_ldd_pad = GetIsLddPad(player);
 
 	std::string handler;
@@ -1193,6 +1182,8 @@ void pad_settings_dialog::ChangeInputType()
 
 	// Get this player's current handler and it's currently available devices
 	m_handler = GetHandler(g_cfg_input.player[player]->handler);
+	ensure(m_handler);
+	m_handler->set_player(player);
 	const auto device_list = m_handler->ListDevices();
 
 	// Localized tooltips
@@ -1464,6 +1455,11 @@ void pad_settings_dialog::HandleDeviceClassChange(int index)
 		case input::product_type::harmonix_rockband_drum_kit:
 		{
 			ui->chooseProduct->addItem(tr("Rockband", "Harmonix Rockband Drum Kit"), static_cast<int>(product.type));
+			break;
+		}
+		case input::product_type::harmonix_rockband_drum_kit_2:
+		{
+			ui->chooseProduct->addItem(tr("Rockband Pro", "Harmonix Rockband Pro-Drum Kit"), static_cast<int>(product.type));
 			break;
 		}
 		case input::product_type::harmonix_rockband_guitar:

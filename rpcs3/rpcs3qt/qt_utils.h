@@ -25,7 +25,7 @@ namespace gui
 
 		// Creates a frame geometry rectangle with given width height that's centered inside the origin,
 		// while still considering screen boundaries.
-		QRect create_centered_window_geometry(const QRect& origin, s32 width, s32 height);
+		QRect create_centered_window_geometry(const QScreen* screen, const QRect& origin, s32 width, s32 height);
 
 		// Returns a custom colored QPixmap based on another QPixmap.
 		// use colorize_all to repaint every opaque pixel with the chosen color
@@ -48,6 +48,14 @@ namespace gui
 
 		// Returns the width of the text
 		int get_label_width(const QString& text, const QFont* font = nullptr);
+
+		template <typename T>
+		void set_font_size(T& qobj, int size)
+		{
+			QFont font = qobj.font();
+			font.setPointSize(size);
+			qobj.setFont(font);
+		}
 
 		// Returns the part of the image loaded from path that is inside the bounding box of its opaque areas
 		QImage get_opaque_image_area(const QString& path);

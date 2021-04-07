@@ -50,4 +50,10 @@ namespace utils
 	u64 get_total_memory();
 
 	u32 get_thread_count();
+
+	u32 get_cpu_family();
+
+	u32 get_cpu_model();
+
+	extern const u64 main_tid;
 }

@@ -11,7 +11,7 @@ TRPLoader::TRPLoader(const fs::file& f)
 {
 }
 
-bool TRPLoader::Install(const std::string& dest, bool show)
+bool TRPLoader::Install(const std::string& dest, bool /*show*/)
 {
 	if (!trp_f)
 	{
@@ -39,15 +39,15 @@ bool TRPLoader::Install(const std::string& dest, bool show)
 	for (const TRPEntry& entry : m_entries)
 	{
 		trp_f.seek(entry.offset);
-		buffer.resize(entry.size);
-		if (!trp_f.read(buffer))
+
+		if (!trp_f.read<true>(buffer, entry.size))
 		{
 			trp_log.error("Failed to read TRPEntry at: offset=0x%x, size=0x%x", entry.offset, entry.size);
 			continue; // ???
 		}
 
 		// Create the file in the temporary directory
-		success = fs::write_file(temp + '/' + vfs::escape(entry.name), fs::create + fs::excl, buffer);
+		success = fs::write_file<true>(temp + '/' + vfs::escape(entry.name), fs::create + fs::excl, buffer);
 		if (!success)
 		{
 			break;
@@ -103,10 +103,10 @@ bool TRPLoader::LoadHeader(bool show)
 	if (m_header.trp_version >= 2)
 	{
 		unsigned char hash[20];
-		std::vector<unsigned char> file_contents(m_header.trp_file_size);
+		std::vector<u8> file_contents;
 
 		trp_f.seek(0);
-		if (!trp_f.read(file_contents))
+		if (!trp_f.read<true>(file_contents, m_header.trp_file_size))
 		{
 			trp_log.notice("Failed verifying checksum");
 		}
@@ -126,18 +126,17 @@ bool TRPLoader::LoadHeader(bool show)
 	}
 
 	m_entries.clear();
-	m_entries.resize(m_header.trp_files_count);
 
-	for (u32 i = 0; i < m_header.trp_files_count; i++)
+	if (!trp_f.read<true>(m_entries, m_header.trp_files_count))
 	{
-		if (!trp_f.read(m_entries[i]))
-		{
-			return false;
-		}
+		return false;
+	}
 
-		if (show)
+	if (show)
+	{
+		for (const auto& entry : m_entries)
 		{
-			trp_log.notice("TRP entry #%d: %s", m_entries[i].name);
+			trp_log.notice("TRP entry #%u: %s", &entry - m_entries.data(), entry.name);
 		}
 	}
 

@@ -160,6 +160,11 @@ void fmt_class_string<SpursWorkloadState>::format(std::string& out, u64 arg)
 
 error_code sys_spu_image_close(ppu_thread&, vm::ptr<sys_spu_image> img);
 
+// Temporarily
+#ifndef _MSC_VER
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#endif
+
 //----------------------------------------------------------------------------
 // Function prototypes
 //----------------------------------------------------------------------------
@@ -517,7 +522,7 @@ s32 _spurs::create_lv2_eq(ppu_thread& ppu, vm::ptr<CellSpurs> spurs, vm::ptr<u32
 		return rc;
 	}
 
-	if (s32 rc = _spurs::attach_lv2_eq(ppu, spurs, *queueId, port, 1, true))
+	if (_spurs::attach_lv2_eq(ppu, spurs, *queueId, port, 1, true))
 	{
 		sys_event_queue_destroy(ppu, *queueId, SYS_EVENT_QUEUE_DESTROY_FORCE);
 	}
@@ -898,9 +903,9 @@ s32 _spurs::create_event_helper(ppu_thread& ppu, vm::ptr<CellSpurs> spurs, u32 p
 		return rc;
 	}
 
-	if (s32 rc = sys_event_port_create(ppu, spurs.ptr(&CellSpurs::eventPort), SYS_EVENT_PORT_LOCAL, SYS_EVENT_PORT_NO_NAME))
+	if (sys_event_port_create(ppu, spurs.ptr(&CellSpurs::eventPort), SYS_EVENT_PORT_LOCAL, SYS_EVENT_PORT_NO_NAME))
 	{
-		if (s32 rc2 = _spurs::detach_lv2_eq(spurs, spurs->spuPort, true))
+		if (_spurs::detach_lv2_eq(spurs, spurs->spuPort, true))
 		{
 			return CELL_SPURS_CORE_ERROR_AGAIN;
 		}
@@ -909,11 +914,11 @@ s32 _spurs::create_event_helper(ppu_thread& ppu, vm::ptr<CellSpurs> spurs, u32 p
 		return CELL_SPURS_CORE_ERROR_AGAIN;
 	}
 
-	if (s32 rc = sys_event_port_connect_local(ppu, spurs->eventPort, spurs->eventQueue))
+	if (sys_event_port_connect_local(ppu, spurs->eventPort, spurs->eventQueue))
 	{
 		sys_event_port_destroy(ppu, spurs->eventPort);
 
-		if (s32 rc2 = _spurs::detach_lv2_eq(spurs, spurs->spuPort, true))
+		if (_spurs::detach_lv2_eq(spurs, spurs->spuPort, true))
 		{
 			return CELL_SPURS_CORE_ERROR_STAT;
 		}
@@ -939,7 +944,7 @@ s32 _spurs::create_event_helper(ppu_thread& ppu, vm::ptr<CellSpurs> spurs, u32 p
 		sys_event_port_disconnect(ppu, spurs->eventPort);
 		sys_event_port_destroy(ppu, spurs->eventPort);
 
-		if (s32 rc = _spurs::detach_lv2_eq(spurs, spurs->spuPort, true))
+		if (_spurs::detach_lv2_eq(spurs, spurs->spuPort, true))
 		{
 			return CELL_SPURS_CORE_ERROR_STAT;
 		}
@@ -4631,7 +4636,6 @@ s32 cellSpursJoinJobChain(ppu_thread& ppu, vm::ptr<CellSpursJobChain> jobChain)
 		return CELL_SPURS_JOB_ERROR_ALIGN;
 
 	const u32 wid = jobChain->workloadId;
-	const auto spurs = +jobChain->spurs;
 
 	if (wid >= CELL_SPURS_MAX_WORKLOAD2)
 		return CELL_SPURS_JOB_ERROR_INVAL;

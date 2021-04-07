@@ -10,7 +10,7 @@ PR_NUMBER="$SYSTEM_PULLREQUEST_PULLREQUESTID"
 QT_HOST="http://mirrors.ocf.berkeley.edu/qt/"
 #QT_HOST="http://qt.mirror.constant.com/"
 QT_URL_VER=$(echo "$QT_VER" | sed "s/\.//g")
-QT_VER_MSVC_UP=$(echo ${QT_VER_MSVC} | tr '[:lower:]' '[:upper:]')
+QT_VER_MSVC_UP=$(echo "${QT_VER_MSVC}" | tr '[:lower:]' '[:upper:]')
 QT_PREFIX="online/qtsdkrepository/windows_x86/desktop/qt${QT_VER_MAIN}_${QT_URL_VER}/qt.qt${QT_VER_MAIN}.${QT_URL_VER}.win64_${QT_VER_MSVC}_64/${QT_VER}-0-${QT_DATE}"
 QT_SUFFIX="-Windows-Windows_10-${QT_VER_MSVC_UP}-Windows-Windows_10-X86_64.7z"
 QT_BASE_URL="${QT_HOST}${QT_PREFIX}qtbase${QT_SUFFIX}"
@@ -76,7 +76,7 @@ for url in $DEP_URLS; do
     case "$url" in
     *qt*) checksum=$(curl -L "${url}.sha1"); algo="sha1"; outDir='C:\Qt\' ;;
     *llvm*) checksum=$(curl -L "${url}.sha256"); algo="sha256"; outDir="." ;;
-    *glslang*) checksum=$(curl -L "${url}.sha256"); algo="sha256"; outDir="./lib/Release - LLVM-x64" ;;
+    *glslang*) checksum=$(curl -L "${url}.sha256"); algo="sha256"; outDir="./lib/Release-x64" ;;
     *Vulkan*)
         # Vulkan setup needs to be run in batch environment
         # Need to subshell this or else it doesn't wait

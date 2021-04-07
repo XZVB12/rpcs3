@@ -93,19 +93,19 @@ namespace rsx
 
 	namespace constants
 	{
-		static std::array<const char*, 16> fragment_texture_names =
+		constexpr std::array<const char*, 16> fragment_texture_names =
 		{
 			"tex0", "tex1", "tex2", "tex3", "tex4", "tex5", "tex6", "tex7",
 			"tex8", "tex9", "tex10", "tex11", "tex12", "tex13", "tex14", "tex15",
 		};
 
-		static std::array<const char*, 4> vertex_texture_names =
+		constexpr std::array<const char*, 4> vertex_texture_names =
 		{
 			"vtex0", "vtex1", "vtex2", "vtex3",
 		};
 
 		// Local RSX memory base (known as constant)
-		static constexpr u32 local_mem_base = 0xC0000000;
+		constexpr u32 local_mem_base = 0xC0000000;
 	}
 
 	/**
@@ -230,8 +230,8 @@ namespace rsx
 		{ CELL_GCM_TEXTURE_REMAP_REMAP, CELL_GCM_TEXTURE_REMAP_REMAP, CELL_GCM_TEXTURE_REMAP_REMAP, CELL_GCM_TEXTURE_REMAP_REMAP }
 	};
 
-	template<typename T>
-	void pad_texture(void* input_pixels, void* output_pixels, u16 input_width, u16 input_height, u16 output_width, u16 output_height)
+	template <typename T>
+	void pad_texture(void* input_pixels, void* output_pixels, u16 input_width, u16 input_height, u16 output_width, u16 /*output_height*/)
 	{
 		T *src = static_cast<T*>(input_pixels);
 		T *dst = static_cast<T*>(output_pixels);
@@ -578,12 +578,12 @@ namespace rsx
 		}
 	}
 
-	static inline const f32 get_resolution_scale()
+	static inline f32 get_resolution_scale()
 	{
 		return g_cfg.video.strict_rendering_mode ? 1.f : (g_cfg.video.resolution_scale_percent / 100.f);
 	}
 
-	static inline const int get_resolution_scale_percent()
+	static inline int get_resolution_scale_percent()
 	{
 		return g_cfg.video.strict_rendering_mode ? 100 : g_cfg.video.resolution_scale_percent;
 	}
@@ -618,7 +618,7 @@ namespace rsx
 		auto width_ = (width * 100) / get_resolution_scale_percent();
 		auto height_ = (height * 100) / get_resolution_scale_percent();
 
-		if (clamp)
+		if constexpr (clamp)
 		{
 			width_ = std::max<u16>(width_, 1);
 			height_ = std::max<u16>(height_, 1);
@@ -695,7 +695,7 @@ namespace rsx
 	{
 		// Converts a stream e.g [1, 2, 3, -1, 4, 5, 6] to a stream with degenerate splits
 		// Output is e.g [1, 2, 3, 3, 3, 4, 4, 5, 6] (5 bogus triangles)
-		T last_index, index;
+		T last_index{}, index;
 		u32 dst_index = 0;
 		for (int n = 0; n < count;)
 		{
@@ -893,11 +893,10 @@ namespace rsx
 	class atomic_bitmask_t
 	{
 	private:
-		atomic_t<bitmask_type> m_data;
+		atomic_t<bitmask_type> m_data{0};
 
 	public:
-		atomic_bitmask_t() { m_data.store(0); }
-		~atomic_bitmask_t() = default;
+		atomic_bitmask_t() = default;
 
 		T load() const
 		{
@@ -951,8 +950,8 @@ namespace rsx
 	struct simple_array
 	{
 	public:
-		using iterator = Ty * ;
-		using const_iterator = Ty * const;
+		using iterator = Ty*;
+		using const_iterator = const Ty*;
 
 	private:
 		u32 _capacity = 0;
@@ -988,7 +987,7 @@ namespace rsx
 			}
 		}
 
-		simple_array(const simple_array<Ty>& other)
+		simple_array(const simple_array& other)
 		{
 			_capacity = other._capacity;
 			_size = other._size;
@@ -998,9 +997,25 @@ namespace rsx
 			std::memcpy(_data, other._data, size_bytes);
 		}
 
-		simple_array(simple_array<Ty>&& other) noexcept
+		simple_array(simple_array&& other) noexcept
 		{
 			swap(other);
+		}
+
+		simple_array& operator=(const simple_array& other)
+		{
+			if (&other != this)
+			{
+				simple_array{other}.swap(*this);
+			}
+
+			return *this;
+		}
+
+		simple_array& operator=(simple_array&& other) noexcept
+		{
+			swap(other);
+			return *this;
 		}
 
 		~simple_array()

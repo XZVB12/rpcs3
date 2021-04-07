@@ -39,14 +39,10 @@ namespace rsx
 			if (m_panels.size() < 7)
 			{
 				// Don't add this panel if there already exists one with the same panel mode
-				for (const auto& existing : m_panels)
+				if (std::none_of(m_panels.begin(), m_panels.end(), [&panel](const osk_panel& existing) { return existing.osk_panel_mode == panel.osk_panel_mode; }))
 				{
-					if (existing.osk_panel_mode == panel.osk_panel_mode)
-					{
-						return;
-					}
+					m_panels.push_back(panel);
 				}
-				m_panels.push_back(panel);
 			}
 		}
 
@@ -387,7 +383,7 @@ namespace rsx
 		{
 			const auto index_limit = (num_columns * num_rows) - 1;
 
-			auto on_accept = [&]()
+			const auto on_accept = [this]()
 			{
 				const u32 current_index = (selected_y * num_columns) + selected_x;
 				const auto& current_cell = m_grid[current_index];
@@ -445,11 +441,10 @@ namespace rsx
 					if (m_grid[get_cell_geometry(current_index).first].enabled)
 					{
 						update_selection_by_index(current_index);
-						m_update = true;
 						break;
 					}
 				}
-
+				m_reset_pulse = true;
 				break;
 			}
 			case pad_button::dpad_left:
@@ -465,7 +460,6 @@ namespace rsx
 						if (m_grid[get_cell_geometry(current_index).first].enabled)
 						{
 							update_selection_by_index(current_index);
-							m_update = true;
 							break;
 						}
 					}
@@ -474,6 +468,7 @@ namespace rsx
 						break;
 					}
 				}
+				m_reset_pulse = true;
 				break;
 			}
 			case pad_button::dpad_down:
@@ -490,10 +485,10 @@ namespace rsx
 					if (m_grid[get_cell_geometry(current_index).first].enabled)
 					{
 						update_selection_by_index(current_index);
-						m_update = true;
 						break;
 					}
 				}
+				m_reset_pulse = true;
 				break;
 			}
 			case pad_button::dpad_up:
@@ -505,10 +500,10 @@ namespace rsx
 					if (m_grid[get_cell_geometry(current_index).first].enabled)
 					{
 						update_selection_by_index(current_index);
-						m_update = true;
 						break;
 					}
 				}
+				m_reset_pulse = true;
 				break;
 			}
 			case pad_button::select:
@@ -534,6 +529,7 @@ namespace rsx
 			case pad_button::cross:
 			{
 				on_accept();
+				m_reset_pulse = true;
 				break;
 			}
 			case pad_button::circle:
@@ -553,6 +549,11 @@ namespace rsx
 			}
 			default:
 				break;
+			}
+
+			if (m_reset_pulse)
+			{
+				m_update = true;
 			}
 		}
 
@@ -710,6 +711,12 @@ namespace rsx
 				m_label.back_color = { 0.f, 0.f, 0.f, 0.f };
 				m_label.set_padding(0, 0, 10, 0);
 
+				if (m_reset_pulse)
+				{
+					// Reset the pulse slightly above 0 falling on each user interaction
+					m_key_pulse_cache.set_sinus_offset(0.6f);
+				}
+
 				for (const auto& c : m_grid)
 				{
 					u16 x = u16(c.pos.x);
@@ -768,16 +775,19 @@ namespace rsx
 					tmp.set_pos(x, y);
 					tmp.set_size(w, h);
 					tmp.pulse_effect_enabled = c.selected;
+					tmp.pulse_sinus_offset = m_key_pulse_cache.pulse_sinus_offset;
 
 					m_cached_resource.add(tmp.get_compiled());
 
 					if (render_label)
 					{
 						m_label.pulse_effect_enabled = c.selected;
+						m_label.pulse_sinus_offset = m_key_pulse_cache.pulse_sinus_offset;
 						m_cached_resource.add(m_label.get_compiled());
 					}
 				}
 
+				m_reset_pulse = false;
 				m_update = false;
 			}
 
@@ -785,7 +795,12 @@ namespace rsx
 			return m_cached_resource;
 		}
 
-		void osk_dialog::Create(const std::string& title, const std::u16string& message, char16_t* init_text, u32 charlimit, u32 prohibit_flags, u32 panel_flag, u32 first_view_panel)
+		struct osk_dialog_thread
+		{
+			static constexpr auto thread_name = "OSK Thread"sv;
+		};
+
+		void osk_dialog::Create(const std::string& /*title*/, const std::u16string& message, char16_t* init_text, u32 charlimit, u32 prohibit_flags, u32 panel_flag, u32 first_view_panel)
 		{
 			state = OskDialogState::Open;
 			flags = prohibit_flags;
@@ -1016,7 +1031,7 @@ namespace rsx
 
 			update_panel();
 
-			g_fxo->init<named_thread>("OSK Thread", [this, tbit = alloc_thread_bit()]
+			g_fxo->get<named_thread<osk_dialog_thread>>()([this, tbit = alloc_thread_bit()]
 			{
 				g_thread_bit = tbit;
 

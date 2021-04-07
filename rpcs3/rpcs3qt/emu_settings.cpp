@@ -12,6 +12,7 @@
 
 #include "util/yaml.hpp"
 #include "Utilities/File.h"
+#include "Utilities/Config.h"
 
 LOG_CHANNEL(cfg_log, "CFG");
 
@@ -63,11 +64,25 @@ namespace
 
 emu_settings::emu_settings()
 	: QObject()
-	, m_render_creator(new render_creator(this))
 {
+}
+
+emu_settings::~emu_settings()
+{
+}
+
+bool emu_settings::Init()
+{
+	m_render_creator = new render_creator(this);
+
 	if (!m_render_creator)
 	{
 		fmt::throw_exception("emu_settings::emu_settings() render_creator is null");
+	}
+
+	if (m_render_creator->abort_requested)
+	{
+		return false;
 	}
 
 	// Make Vulkan default setting if it is supported
@@ -78,10 +93,8 @@ emu_settings::emu_settings()
 		Emu.SetDefaultRenderer(video_renderer::vulkan);
 		Emu.SetDefaultGraphicsAdapter(adapter);
 	}
-}
 
-emu_settings::~emu_settings()
-{
+	return true;
 }
 
 void emu_settings::LoadSettings(const std::string& title_id)
@@ -96,8 +109,8 @@ void emu_settings::LoadSettings(const std::string& title_id)
 
 	if (default_error.empty())
 	{
-		m_defaultSettings = default_config;
-		m_currentSettings = YAML::Clone(default_config);
+		m_default_settings = default_config;
+		m_current_settings = YAML::Clone(default_config);
 	}
 	else
 	{
@@ -114,7 +127,7 @@ void emu_settings::LoadSettings(const std::string& title_id)
 
 	if (global_error.empty())
 	{
-		m_currentSettings += global_config;
+		m_current_settings += global_config;
 	}
 	else
 	{
@@ -126,6 +139,10 @@ void emu_settings::LoadSettings(const std::string& title_id)
 	// Add game config
 	if (!title_id.empty())
 	{
+		// Remove obsolete settings of the global config before adding the custom settings.
+		// Otherwise we'll always trigger the "obsolete settings dialog" when editing custom configs.
+		ValidateSettings(true);
+
 		const std::string config_path_new = Emulator::GetCustomConfigPath(m_title_id);
 		const std::string config_path_old = Emulator::GetCustomConfigPath(m_title_id, true);
 		std::string custom_config_path;
@@ -148,7 +165,7 @@ void emu_settings::LoadSettings(const std::string& title_id)
 
 				if (custom_error.empty())
 				{
-					m_currentSettings += custom_config;
+					m_current_settings += custom_config;
 				}
 				else
 				{
@@ -161,10 +178,97 @@ void emu_settings::LoadSettings(const std::string& title_id)
 	}
 }
 
+bool emu_settings::ValidateSettings(bool cleanup)
+{
+	bool is_clean = true;
+
+	std::function<void(int, YAML::Node&, std::vector<std::string>&, cfg::_base*)> search_level;
+	search_level = [&search_level, &is_clean, &cleanup, this](int level, YAML::Node& yml_node, std::vector<std::string>& keys, cfg::_base* cfg_base)
+	{
+		if (!yml_node || !yml_node.IsMap())
+		{
+			return;
+		}
+
+		const int next_level = level + 1;
+
+		for (const auto& yml_entry : yml_node)
+		{
+			const std::string key = yml_entry.first.Scalar();
+			cfg::_base* cfg_node = nullptr;
+
+			keys.resize(next_level);
+			keys[level] = key;
+
+			if (cfg_base && cfg_base->get_type() == cfg::type::node)
+			{
+				for (const auto& node : static_cast<const cfg::node*>(cfg_base)->get_nodes())
+				{
+					if (node->get_name() == keys[level])
+					{
+						cfg_node = node;
+						break;
+					}
+				}
+			}
+
+			if (cfg_node)
+			{
+				YAML::Node next_node = yml_node[key];
+				search_level(next_level, next_node, keys, cfg_node);
+			}
+			else
+			{
+				const auto get_full_key = [&keys](const std::string& seperator) -> std::string
+				{
+					std::string full_key;
+					for (usz i = 0; i < keys.size(); i++)
+					{
+						full_key += keys[i];
+						if (i < keys.size() - 1) full_key += seperator;
+					}
+					return full_key;
+				};
+
+				is_clean = false;
+
+				if (cleanup)
+				{
+					if (!yml_node.remove(key))
+					{
+						cfg_log.error("Could not remove config entry: %s", get_full_key(": "));
+						is_clean = true; // abort
+						return;
+					}
+
+					// Let's only remove one entry at a time. I got some weird issues when doing all at once.
+					return;
+				}
+				else
+				{
+					cfg_log.warning("Unknown config entry found: %s", get_full_key(": "));
+				}
+			}
+		}
+	};
+
+	cfg_root root;
+	std::vector<std::string> keys;
+
+	do
+	{
+		is_clean = true;
+		search_level(0, m_current_settings, keys, &root);
+	}
+	while (cleanup && !is_clean);
+
+	return is_clean;
+}
+
 void emu_settings::SaveSettings()
 {
 	YAML::Emitter out;
-	emit_data(out, m_currentSettings);
+	emit_data(out, m_current_settings);
 
 	std::string config_name;
 
@@ -178,8 +282,9 @@ void emu_settings::SaveSettings()
 	}
 
 	// Save config atomically
-	fs::file(config_name + ".tmp", fs::rewrite).write(out.c_str(), out.size());
-	fs::rename(config_name + ".tmp", config_name, true);
+	fs::pending_file temp(config_name);
+	temp.file.write(out.c_str(), out.size());
+	temp.commit();
 
 	// Check if the running config/title is the same as the edited config/title.
 	if (config_name == g_cfg.name || m_title_id == Emu.GetTitleID())
@@ -652,12 +757,12 @@ void emu_settings::EnhanceRadioButton(QButtonGroup* button_group, emu_settings_t
 
 std::vector<std::string> emu_settings::GetLibrariesControl()
 {
-	return m_currentSettings["Core"]["Libraries Control"].as<std::vector<std::string>, std::initializer_list<std::string>>({});
+	return m_current_settings["Core"]["Libraries Control"].as<std::vector<std::string>, std::initializer_list<std::string>>({});
 }
 
 void emu_settings::SaveSelectedLibraries(const std::vector<std::string>& libs)
 {
-	m_currentSettings["Core"]["Libraries Control"] = libs;
+	m_current_settings["Core"]["Libraries Control"] = libs;
 }
 
 QStringList emu_settings::GetSettingOptions(emu_settings_type type) const
@@ -667,7 +772,7 @@ QStringList emu_settings::GetSettingOptions(emu_settings_type type) const
 
 std::string emu_settings::GetSettingDefault(emu_settings_type type) const
 {
-	if (auto node = cfg_adapter::get_node(m_defaultSettings, settings_location[type]); node && node.IsScalar())
+	if (auto node = cfg_adapter::get_node(m_default_settings, settings_location[type]); node && node.IsScalar())
 	{
 		return node.Scalar();
 	}
@@ -678,7 +783,7 @@ std::string emu_settings::GetSettingDefault(emu_settings_type type) const
 
 std::string emu_settings::GetSetting(emu_settings_type type) const
 {
-	if (auto node = cfg_adapter::get_node(m_currentSettings, settings_location[type]); node && node.IsScalar())
+	if (auto node = cfg_adapter::get_node(m_current_settings, settings_location[type]); node && node.IsScalar())
 	{
 		return node.Scalar();
 	}
@@ -689,7 +794,7 @@ std::string emu_settings::GetSetting(emu_settings_type type) const
 
 void emu_settings::SetSetting(emu_settings_type type, const std::string& val)
 {
-	cfg_adapter::get_node(m_currentSettings, settings_location[type]) = val;
+	cfg_adapter::get_node(m_current_settings, settings_location[type]) = val;
 }
 
 void emu_settings::OpenCorrectionDialog(QWidget* parent)
@@ -728,6 +833,14 @@ QString emu_settings::GetLocalizedSetting(const QString& original, emu_settings_
 		case spu_block_size_type::safe: return tr("Safe", "SPU block size");
 		case spu_block_size_type::mega: return tr("Mega", "SPU block size");
 		case spu_block_size_type::giga: return tr("Giga", "SPU block size");
+		}
+		break;
+	case emu_settings_type::ThreadSchedulerMode:
+		switch (static_cast<thread_scheduler_mode>(index))
+		{
+		case thread_scheduler_mode::old: return tr("RPCS3 Scheduler", "Thread Scheduler Mode");
+		case thread_scheduler_mode::alt: return tr("RPCS3 Alternative Scheduler", "Thread Scheduler Mode");
+		case thread_scheduler_mode::os: return tr("Operating System", "Thread Scheduler Mode");
 		}
 		break;
 	case emu_settings_type::EnableTSX:
@@ -840,6 +953,14 @@ QString emu_settings::GetLocalizedSetting(const QString& original, emu_settings_
 		case move_handler::mouse: return tr("Mouse", "Move handler");
 		}
 		break;
+	case emu_settings_type::Buzz:
+		switch (static_cast<buzz_handler>(index))
+		{
+		case buzz_handler::null: return tr("Null (use real Buzzers)", "Buzz handler");
+		case buzz_handler::one_controller: return tr("1 controller (1-4 players)", "Buzz handler");
+		case buzz_handler::two_controllers: return tr("2 controllers (5-7 players)", "Buzz handler");
+		}
+		break;
 	case emu_settings_type::InternetStatus:
 		switch (static_cast<np_internet_status>(index))
 		{
@@ -866,6 +987,7 @@ QString emu_settings::GetLocalizedSetting(const QString& original, emu_settings_
 	case emu_settings_type::PerfOverlayDetailLevel:
 		switch (static_cast<detail_level>(index))
 		{
+		case detail_level::none: return tr("None", "Detail Level");
 		case detail_level::minimal: return tr("Minimal", "Detail Level");
 		case detail_level::low: return tr("Low", "Detail Level");
 		case detail_level::medium: return tr("Medium", "Detail Level");

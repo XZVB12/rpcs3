@@ -9,7 +9,6 @@
 #include "Utilities/Thread.h"
 #include "Utilities/address_range.h"
 #include "Emu/CPU/CPUThread.h"
-#include "Emu/Cell/lv2/sys_memory.h"
 #include "Emu/RSX/RSXThread.h"
 #include "Emu/Cell/SPURecompiler.h"
 #include "Emu/perf_meter.hpp"
@@ -26,7 +25,7 @@ namespace vm
 {
 	static u8* memory_reserve_4GiB(void* _addr, u64 size = 0x100000000)
 	{
-		for (u64 addr = reinterpret_cast<u64>(_addr) + 0x100000000;; addr += 0x100000000)
+		for (u64 addr = reinterpret_cast<u64>(_addr) + 0x100000000; addr < 0x8000'0000'0000; addr += 0x100000000)
 		{
 			if (auto ptr = utils::memory_reserve(size, reinterpret_cast<void*>(addr)))
 			{
@@ -34,8 +33,7 @@ namespace vm
 			}
 		}
 
-		// TODO: a condition to break loop
-		return static_cast<u8*>(utils::memory_reserve(size));
+		fmt::throw_exception("Failed to reserve vm memory");
 	}
 
 	// Emulated virtual memory
@@ -49,6 +47,9 @@ namespace vm
 
 	// Stats for debugging
 	u8* const g_stat_addr = memory_reserve_4GiB(g_exec_addr);
+
+	// For SPU
+	u8* const g_free_addr = g_stat_addr + 0x1'0000'0000;
 
 	// Reservation stats
 	alignas(4096) u8 g_reservations[65536 / 128 * 64]{0};
@@ -83,7 +84,7 @@ namespace vm
 	std::pair<bool, u64> try_reservation_update(u32 addr)
 	{
 		// Update reservation info with new timestamp
-		auto& res = reservation_acquire(addr, 1);
+		auto& res = reservation_acquire(addr);
 		const u64 rtime = res;
 
 		return {!(rtime & vm::rsrv_unique_lock) && res.compare_and_swap_test(rtime, rtime + 128), rtime};
@@ -100,6 +101,11 @@ namespace vm
 
 			if (ok || (old & -128) < (rtime & -128))
 			{
+				if (ok)
+				{
+					reservation_notifier(addr).notify_all();
+				}
+
 				return;
 			}
 
@@ -377,18 +383,6 @@ namespace vm
 		}
 	}
 
-	void cleanup_unlock(cpu_thread& cpu) noexcept
-	{
-		for (u32 i = 0, max = g_cfg.core.ppu_threads; i < max; i++)
-		{
-			if (g_locks[i] == &cpu)
-			{
-				g_locks[i].compare_and_swap_test(&cpu, nullptr);
-				return;
-			}
-		}
-	}
-
 	void temporary_unlock(cpu_thread& cpu) noexcept
 	{
 		if (!(cpu.state & cpu_flag::wait)) cpu.state += cpu_flag::wait;
@@ -619,7 +613,7 @@ namespace vm
 
 	void reservation_op_internal(u32 addr, std::function<bool()> func)
 	{
-		auto& res = vm::reservation_acquire(addr, 1);
+		auto& res = vm::reservation_acquire(addr);
 		auto* ptr = vm::get_super_ptr(addr & -128);
 
 		cpu_thread::suspend_all<+1>(get_current_cpu_thread(), {ptr, ptr + 64, &res}, [&]
@@ -728,7 +722,7 @@ namespace vm
 		// Notify rsx that range has become valid
 		// Note: This must be done *before* memory gets mapped while holding the vm lock, otherwise
 		//       the RSX might try to invalidate memory that got unmapped and remapped
-		if (const auto rsxthr = g_fxo->get<rsx::thread>())
+		if (const auto rsxthr = g_fxo->try_get<rsx::thread>())
 		{
 			rsxthr->on_notify_memory_mapped(addr, size);
 		}
@@ -750,13 +744,13 @@ namespace vm
 
 		if (flags & page_executable)
 		{
-			// TODO
+			// TODO (dead code)
 			utils::memory_commit(g_exec_addr + addr * 2, size * 2);
-		}
 
-		if (g_cfg.core.ppu_debug)
-		{
-			utils::memory_commit(g_stat_addr + addr, size);
+			if (g_cfg.core.ppu_debug)
+			{
+				utils::memory_commit(g_stat_addr + addr, size);
+			}
 		}
 
 		for (u32 i = addr / 4096; i < addr / 4096 + size / 4096; i++)
@@ -916,9 +910,9 @@ namespace vm
 		// Notify rsx to invalidate range
 		// Note: This must be done *before* memory gets unmapped while holding the vm lock, otherwise
 		//       the RSX might try to call VirtualProtect on memory that is already unmapped
-		if (const auto rsxthr = g_fxo->get<rsx::thread>())
+		if (auto& rsxthr = g_fxo->get<rsx::thread>(); g_fxo->is_init<rsx::thread>())
 		{
-			rsxthr->on_notify_memory_unmapped(addr, size);
+			rsxthr.on_notify_memory_unmapped(addr, size);
 		}
 
 		// Actually unmap memory
@@ -936,11 +930,11 @@ namespace vm
 		if (is_exec)
 		{
 			utils::memory_decommit(g_exec_addr + addr * 2, size * 2);
-		}
 
-		if (g_cfg.core.ppu_debug)
-		{
-			utils::memory_decommit(g_stat_addr + addr, size);
+			if (g_cfg.core.ppu_debug)
+			{
+				utils::memory_decommit(g_stat_addr + addr, size);
+			}
 		}
 
 		// Unlock
@@ -998,51 +992,40 @@ namespace vm
 
 		if (!block)
 		{
-			fmt::throw_exception("Invalid memory location (%u)", +location);
+			vm_log.error("vm::alloc(): Invalid memory location (%u)", +location);
+			ensure(location < memory_location_max); // The only allowed locations to fail
+			return 0;
 		}
 
 		return block->alloc(size, nullptr, align);
 	}
 
-	u32 falloc(u32 addr, u32 size, memory_location_t location)
+	u32 falloc(u32 addr, u32 size, memory_location_t location, const std::shared_ptr<utils::shm>* src)
 	{
 		const auto block = get(location, addr);
 
 		if (!block)
 		{
-			fmt::throw_exception("Invalid memory location (%u, addr=0x%x)", +location, addr);
+			vm_log.error("vm::falloc(): Invalid memory location (%u, addr=0x%x)", +location, addr);
+			ensure(location == any || location < memory_location_max); // The only allowed locations to fail
+			return 0;
 		}
 
-		return block->falloc(addr, size);
+		return block->falloc(addr, size, src);
 	}
 
-	u32 dealloc(u32 addr, memory_location_t location)
+	u32 dealloc(u32 addr, memory_location_t location, const std::shared_ptr<utils::shm>* src)
 	{
 		const auto block = get(location, addr);
 
 		if (!block)
 		{
-			fmt::throw_exception("Invalid memory location (%u, addr=0x%x)", +location, addr);
+			vm_log.error("vm::dealloc(): Invalid memory location (%u, addr=0x%x)", +location, addr);
+			ensure(location == any || location < memory_location_max); // The only allowed locations to fail
+			return 0;
 		}
 
-		return block->dealloc(addr);
-	}
-
-	void dealloc_verbose_nothrow(u32 addr, memory_location_t location) noexcept
-	{
-		const auto block = get(location, addr);
-
-		if (!block)
-		{
-			vm_log.error("vm::dealloc(): invalid memory location (%u, addr=0x%x)\n", +location, addr);
-			return;
-		}
-
-		if (!block->dealloc(addr))
-		{
-			vm_log.error("vm::dealloc(): deallocation failed (addr=0x%x)\n", addr);
-			return;
-		}
+		return block->dealloc(addr, src);
 	}
 
 	void lock_sudo(u32 addr, u32 size)
@@ -1072,10 +1055,10 @@ namespace vm
 			}
 		}
 
-		const u32 page_addr = addr + (this->flags & 0x10 ? 0x1000 : 0);
-		const u32 page_size = size - (this->flags & 0x10 ? 0x2000 : 0);
+		const u32 page_addr = addr + (this->flags & stack_guarded ? 0x1000 : 0);
+		const u32 page_size = size - (this->flags & stack_guarded ? 0x2000 : 0);
 
-		if (this->flags & 0x10)
+		if (this->flags & stack_guarded)
 		{
 			// Mark overflow/underflow guard pages as allocated
 			ensure(!g_pages[addr / 4096].exchange(page_allocated));
@@ -1090,7 +1073,7 @@ namespace vm
 			std::remove_reference_t<decltype(map)>::value_type* result = nullptr;
 
 			// Check eligibility
-			if (!_this || !(SYS_MEMORY_PAGE_SIZE_MASK & _this->flags) || _this->addr < 0x20000000 || _this->addr >= 0xC0000000)
+			if (!_this || !(page_size_mask & _this->flags) || _this->addr < 0x20000000 || _this->addr >= 0xC0000000)
 			{
 				return result;
 			}
@@ -1108,14 +1091,12 @@ namespace vm
 		});
 
 		// Fill stack guards with STACKGRD
-		if (this->flags & 0x10)
+		if (this->flags & stack_guarded)
 		{
 			auto fill64 = [](u8* ptr, u64 data, usz count)
 			{
-				u64* target = reinterpret_cast<u64*>(ptr);
-
 #ifdef _MSC_VER
-				__stosq(target, data, count);
+				__stosq(reinterpret_cast<u64*>(ptr), data, count);
 #else
 				__asm__ ("mov %0, %%rdi; mov %1, %%rax; mov %2, %%rcx; rep stosq;"
 					:
@@ -1140,7 +1121,7 @@ namespace vm
 		, size(size)
 		, flags(flags)
 	{
-		if (flags & 0x100 || flags & 0x20)
+		if (flags & page_size_4k || flags & preallocated)
 		{
 			// Special path for whole-allocated areas allowing 4k granularity
 			m_common = std::make_shared<utils::shm>(size);
@@ -1182,10 +1163,10 @@ namespace vm
 		}
 
 		// Determine minimal alignment
-		const u32 min_page_size = flags & 0x100 ? 0x1000 : 0x10000;
+		const u32 min_page_size = flags & page_size_4k ? 0x1000 : 0x10000;
 
 		// Align to minimal page size
-		const u32 size = utils::align(orig_size, min_page_size) + (flags & 0x10 ? 0x2000 : 0);
+		const u32 size = utils::align(orig_size, min_page_size) + (flags & stack_guarded ? 0x2000 : 0);
 
 		// Check alignment (it's page allocation, so passing small values there is just silly)
 		if (align < min_page_size || align != (0x80000000u >> std::countl_zero(align)))
@@ -1199,13 +1180,13 @@ namespace vm
 			return 0;
 		}
 
-		u8 pflags = flags & 0x1000 ? 0 : page_readable | page_writable;
+		u8 pflags = flags & page_hidden ? 0 : page_readable | page_writable;
 
-		if ((flags & SYS_MEMORY_PAGE_SIZE_64K) == SYS_MEMORY_PAGE_SIZE_64K)
+		if ((flags & page_size_64k) == page_size_64k)
 		{
 			pflags |= page_64k_size;
 		}
-		else if (!(flags & (SYS_MEMORY_PAGE_SIZE_MASK & ~SYS_MEMORY_PAGE_SIZE_1M)))
+		else if (!(flags & (page_size_mask & ~page_size_1m)))
 		{
 			pflags |= page_1m_size;
 		}
@@ -1229,7 +1210,7 @@ namespace vm
 		{
 			if (try_alloc(addr, pflags, size, std::move(shm)))
 			{
-				return addr + (flags & 0x10 ? 0x1000 : 0);
+				return addr + (flags & stack_guarded ? 0x1000 : 0);
 			}
 		}
 
@@ -1245,24 +1226,37 @@ namespace vm
 		}
 
 		// Determine minimal alignment
-		const u32 min_page_size = flags & 0x100 ? 0x1000 : 0x10000;
+		const u32 min_page_size = flags & page_size_4k ? 0x1000 : 0x10000;
+
+		// Take address misalignment into account
+		const u32 size0 = orig_size + addr % min_page_size;
 
 		// Align to minimal page size
-		const u32 size = utils::align(orig_size, min_page_size);
+		const u32 size = utils::align(size0, min_page_size);
 
-		// return if addr or size is invalid
-		if (!size || addr < this->addr || orig_size > size || addr + u64{size} > this->addr + u64{this->size} || flags & 0x10)
+		// Return if addr or size is invalid
+		// If shared memory is provided, addr/size must be aligned
+		if (!size ||
+			addr < this->addr ||
+			orig_size > size0 ||
+			orig_size > size ||
+			(addr - addr % min_page_size) + u64{size} > this->addr + u64{this->size} ||
+			(src && (orig_size | addr) % min_page_size) ||
+			flags & stack_guarded)
 		{
 			return 0;
 		}
 
-		u8 pflags = flags & 0x1000 ? 0 : page_readable | page_writable;
+		// Force aligned address
+		addr -= addr % min_page_size;
 
-		if ((flags & SYS_MEMORY_PAGE_SIZE_64K) == SYS_MEMORY_PAGE_SIZE_64K)
+		u8 pflags = flags & page_hidden ? 0 : page_readable | page_writable;
+
+		if ((flags & page_size_64k) == page_size_64k)
 		{
 			pflags |= page_64k_size;
 		}
-		else if (!(flags & (SYS_MEMORY_PAGE_SIZE_MASK & ~SYS_MEMORY_PAGE_SIZE_1M)))
+		else if (!(flags & (page_size_mask & ~page_size_1m)))
 		{
 			pflags |= page_1m_size;
 		}
@@ -1295,7 +1289,7 @@ namespace vm
 		{
 			vm::writer_lock lock(0);
 
-			const auto found = m_map.find(addr - (flags & 0x10 ? 0x1000 : 0));
+			const auto found = m_map.find(addr - (flags & stack_guarded ? 0x1000 : 0));
 
 			if (found == m_map.end())
 			{
@@ -1308,9 +1302,9 @@ namespace vm
 			}
 
 			// Get allocation size
-			const auto size = found->second.first - (flags & 0x10 ? 0x2000 : 0);
+			const auto size = found->second.first - (flags & stack_guarded ? 0x2000 : 0);
 
-			if (flags & 0x10)
+			if (flags & stack_guarded)
 			{
 				// Clear guard pages
 				ensure(g_pages[addr / 4096 - 1].exchange(0) == page_allocated);
@@ -1321,7 +1315,7 @@ namespace vm
 			ensure(size == _page_unmap(addr, size, found->second.second.get()));
 
 			// Clear stack guards
-			if (flags & 0x10)
+			if (flags & stack_guarded)
 			{
 				std::memset(g_sudo_addr + addr - 4096, 0, 4096);
 				std::memset(g_sudo_addr + addr + size, 0, 4096);
@@ -1381,7 +1375,7 @@ namespace vm
 
 		for (auto& entry : (m.*block_map)())
 		{
-			result += entry.second.first - (flags & 0x10 ? 0x2000 : 0);
+			result += entry.second.first - (flags & stack_guarded ? 0x2000 : 0);
 		}
 
 		return result;
@@ -1525,12 +1519,12 @@ namespace vm
 		{
 			if (*it && (*it)->addr == addr)
 			{
-				if (must_be_empty && (*it)->flags & 0x3)
+				if (must_be_empty && (*it)->flags & bf0_mask)
 				{
 					continue;
 				}
 
-				if (!must_be_empty && ((*it)->flags & 0x3) != 2)
+				if (!must_be_empty && ((*it)->flags & bf0_mask) != bf0_0x2)
 				{
 					continue;
 				}
@@ -1651,13 +1645,13 @@ namespace vm
 
 			g_locations =
 			{
-				std::make_shared<block_t>(0x00010000, 0x1FFF0000, 0x220), // main
-				std::make_shared<block_t>(0x20000000, 0x10000000, 0x201), // user 64k pages
-				nullptr, // user 1m pages
-				nullptr, // rsx context
-				std::make_shared<block_t>(0xC0000000, 0x10000000, 0x220), // video
-				std::make_shared<block_t>(0xD0000000, 0x10000000, 0x131), // stack
-				std::make_shared<block_t>(0xE0000000, 0x20000000), // SPU reserved
+				std::make_shared<block_t>(0x00010000, 0x1FFF0000, page_size_64k | preallocated), // main
+				std::make_shared<block_t>(0x20000000, 0x10000000, page_size_64k | bf0_0x1),		 // user 64k pages
+				nullptr,                                                                         // user 1m pages
+				nullptr,                                                                         // rsx context
+				std::make_shared<block_t>(0xC0000000, 0x10000000, page_size_64k | preallocated), // video
+				std::make_shared<block_t>(0xD0000000, 0x10000000, page_size_4k  | preallocated | stack_guarded | bf0_0x1), // stack
+				std::make_shared<block_t>(0xE0000000, 0x20000000, page_size_64k),                // SPU reserved
 			};
 
 			std::memset(g_reservations, 0, sizeof(g_reservations));
@@ -1672,8 +1666,11 @@ namespace vm
 		g_locations.clear();
 
 		utils::memory_decommit(g_base_addr, 0x200000000);
-		utils::memory_decommit(g_exec_addr, 0x100000000);
+		utils::memory_decommit(g_exec_addr, 0x200000000);
 		utils::memory_decommit(g_stat_addr, 0x100000000);
+
+		std::memset(g_range_lock_set, 0, sizeof(g_range_lock_set));
+		g_range_lock_bits = 0;
 	}
 }
 

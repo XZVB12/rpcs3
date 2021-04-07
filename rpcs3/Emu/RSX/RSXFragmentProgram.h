@@ -205,7 +205,7 @@ union SRC2
 	};
 };
 
-static const char* rsx_fp_input_attr_regs[] =
+constexpr const char* rsx_fp_input_attr_regs[] =
 {
 	"WPOS", "COL0", "COL1", "FOGC", "TEX0",
 	"TEX1", "TEX2", "TEX3", "TEX4", "TEX5",
@@ -243,6 +243,18 @@ struct RSXFragmentProgram
 
 		data_storage_helper(const data_storage_helper& other)
 		{
+			this->operator=(other);
+		}
+
+		data_storage_helper(data_storage_helper&& other)
+			: data_ptr(other.data_ptr)
+			, local_storage(std::move(other.local_storage))
+		{
+			other.data_ptr = nullptr;
+		}
+
+		data_storage_helper& operator=(const data_storage_helper& other)
+		{
 			if (other.data_ptr == other.local_storage.data())
 			{
 				local_storage = other.local_storage;
@@ -253,6 +265,20 @@ struct RSXFragmentProgram
 				data_ptr = other.data_ptr;
 				local_storage.clear();
 			}
+
+			return *this;
+		}
+
+		data_storage_helper& operator=(data_storage_helper&& other)
+		{
+			if (this != &other)
+			{
+				data_ptr = other.data_ptr;
+				local_storage = std::move(other.local_storage);
+				other.data_ptr = nullptr;
+			}
+
+			return *this;
 		}
 
 		void deep_copy(u32 max_length)

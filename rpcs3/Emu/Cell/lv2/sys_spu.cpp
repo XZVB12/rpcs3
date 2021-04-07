@@ -14,6 +14,7 @@
 #include "Emu/Cell/PPUThread.h"
 #include "Emu/Cell/PPUModule.h"
 #include "Emu/Cell/RawSPUThread.h"
+#include "Emu/Cell/timers.hpp"
 #include "sys_interrupt.h"
 #include "sys_process.h"
 #include "sys_memory.h"
@@ -24,8 +25,6 @@
 #include "util/asm.hpp"
 
 LOG_CHANNEL(sys_spu);
-
-extern u64 get_timebased_time();
 
 template <>
 void fmt_class_string<spu_group_status>::format(std::string& out, u64 arg)
@@ -80,7 +79,7 @@ void sys_spu_image::load(const fs::file& stream)
 	const u32 mem_size = nsegs * sizeof(sys_spu_segment) + ::size32(stream);
 	const vm::ptr<sys_spu_segment> segs = vm::cast(vm::alloc(mem_size, vm::main));
 
-	const u32 entry = obj.header.e_entry;
+	//const u32 entry = obj.header.e_entry;
 
 	const u32 src = (segs + nsegs).addr();
 
@@ -106,7 +105,8 @@ void sys_spu_image::free()
 {
 	if (type == SYS_SPU_IMAGE_TYPE_KERNEL)
 	{
-		vm::dealloc_verbose_nothrow(segs.addr(), vm::main);
+		// TODO: Remove, should be handled by syscalls
+		ensure(vm::dealloc(segs.addr(), vm::main));
 	}
 }
 
@@ -167,15 +167,15 @@ void sys_spu_image::deploy(u8* loc, sys_spu_segment* segs, u32 nsegs)
 	}
 
 	// Apply the patch
-	auto applied = g_fxo->get<patch_engine>()->apply(hash, loc);
+	auto applied = g_fxo->get<patch_engine>().apply(hash, loc);
 
 	if (!Emu.GetTitleID().empty())
 	{
 		// Alternative patch
-		applied += g_fxo->get<patch_engine>()->apply(Emu.GetTitleID() + '-' + hash, loc);
+		applied += g_fxo->get<patch_engine>().apply(Emu.GetTitleID() + '-' + hash, loc);
 	}
 
-	spu_log.notice("Loaded SPU image: %s (<- %u)%s", hash, applied, dump);
+	spu_log.notice("Loaded SPU image: %s (<- %u)%s", hash, applied.size(), dump);
 }
 
 // Get spu thread ptr, returns group ptr as well for refcounting
@@ -251,7 +251,7 @@ error_code sys_spu_image_open(ppu_thread& ppu, vm::ptr<sys_spu_image> img, vm::c
 		return {fs_error, path};
 	}
 
-	u128 klic = g_fxo->get<loaded_npdrm_keys>()->devKlic.load();
+	u128 klic = g_fxo->get<loaded_npdrm_keys>().devKlic.load();
 
 	const fs::file elf_file = decrypt_self(std::move(file), reinterpret_cast<u8*>(&klic));
 
@@ -622,7 +622,7 @@ error_code sys_spu_thread_group_create(ppu_thread& ppu, vm::ptr<u32> id, u32 num
 	}
 	else
 	{
-		ct = g_fxo->get<lv2_memory_container>();
+		ct = &g_fxo->get<lv2_memory_container>();
 
 		if (ct->take(mem_size) != mem_size)
 		{
@@ -686,7 +686,7 @@ error_code sys_spu_thread_group_destroy(ppu_thread& ppu, u32 id)
 		if (auto thread = t.get())
 		{
 			// Deallocate LS
-			ensure(vm::get(vm::spu)->dealloc(SPU_FAKE_BASE_ADDR + SPU_LS_SIZE * (thread->id & 0xffffff), &thread->shm));
+			thread->cleanup();
 
 			// Remove ID from IDM (destruction will occur in group destructor)
 			idm::remove<named_thread<spu_thread>>(thread->id);
@@ -761,7 +761,7 @@ error_code sys_spu_thread_group_start(ppu_thread& ppu, u32 id)
 		if (thread && ran_threads--)
 		{
 			thread->state -= cpu_flag::stop;
-			thread_ctrl::notify(*thread);
+			thread->state.notify_one(cpu_flag::stop);
 		}
 	}
 
@@ -911,7 +911,7 @@ error_code sys_spu_thread_group_resume(ppu_thread& ppu, u32 id)
 		if (thread)
 		{
 			thread->state -= cpu_flag::suspend;
-			thread_ctrl::notify(*thread);
+			thread->state.notify_one(cpu_flag::suspend);
 		}
 	}
 
@@ -1028,9 +1028,7 @@ error_code sys_spu_thread_group_terminate(ppu_thread& ppu, u32 id, s32 value)
 	{
 		while (thread && group->running && thread->state & cpu_flag::wait)
 		{
-			// TODO: replace with proper solution
-			if (atomic_wait_engine::raw_notify(nullptr, thread_ctrl::get_native_id(*thread)))
-				break;
+			thread_ctrl::notify(*thread);
 		}
 	}
 
@@ -1102,14 +1100,16 @@ error_code sys_spu_thread_group_join(ppu_thread& ppu, u32 id, vm::ptr<u32> cause
 		lv2_obj::sleep(ppu);
 		lock.unlock();
 
-		while (!ppu.state.test_and_reset(cpu_flag::signal))
+		while (true)
 		{
-			if (ppu.is_stopped())
+			const auto state = ppu.state.fetch_sub(cpu_flag::signal);
+
+			if (is_stopped(state) || state & cpu_flag::signal)
 			{
-				return 0;
+				break;
 			}
 
-			thread_ctrl::wait();
+			thread_ctrl::wait_on(ppu.state, state);
 		}
 	}
 	while (0);
@@ -1770,7 +1770,7 @@ error_code sys_spu_thread_group_log(ppu_thread& ppu, s32 command, vm::ptr<s32> s
 		atomic_t<s32> state = SYS_SPU_THREAD_GROUP_LOG_ON;
 	};
 
-	const auto state = g_fxo->get<spu_group_log_state_t>();
+	auto& state = g_fxo->get<spu_group_log_state_t>();
 
 	switch (command)
 	{
@@ -1781,13 +1781,13 @@ error_code sys_spu_thread_group_log(ppu_thread& ppu, s32 command, vm::ptr<s32> s
 			return CELL_EFAULT;
 		}
 
-		*stat = state->state;
+		*stat = state.state;
 		break;
 	}
 	case SYS_SPU_THREAD_GROUP_LOG_ON:
 	case SYS_SPU_THREAD_GROUP_LOG_OFF:
 	{
-		state->state.release(command);
+		state.state.release(command);
 		break;
 	}
 	default: return CELL_EINVAL;
@@ -1896,7 +1896,7 @@ error_code sys_isolated_spu_create(ppu_thread& ppu, vm::ptr<u32> id, vm::ptr<voi
 			index = 0;
 	}
 
-	const vm::addr_t ls_addr{RAW_SPU_BASE_ADDR + RAW_SPU_OFFSET * index};
+	const u32 ls_addr = RAW_SPU_BASE_ADDR + RAW_SPU_OFFSET * index;
 
 	const auto thread = idm::make_ptr<named_thread<spu_thread>>(fmt::format("IsoSPU[0x%x] ", index), nullptr, index, "", index, true);
 
@@ -1988,7 +1988,16 @@ error_code raw_spu_destroy(ppu_thread& ppu, u32 id)
 
 	(*thread)();
 
-	if (!idm::remove_verify<named_thread<spu_thread>>(idm_id, std::move(thread.ptr)))
+	if (auto ret = idm::withdraw<named_thread<spu_thread>>(idm_id, [&](spu_thread& spu) -> CellError
+	{
+		if (std::addressof(spu) != std::addressof(*thread))
+		{
+			return CELL_ESRCH;
+		}
+
+		spu.cleanup();
+		return {};
+	}); !ret || ret.ret)
 	{
 		// Other thread destroyed beforehead
 		return CELL_ESRCH;
@@ -2016,7 +2025,7 @@ error_code sys_isolated_spu_destroy(ppu_thread& ppu, u32 id)
 }
 
 template <bool isolated = false>
-error_code raw_spu_create_interrupt_tag(u32 id, u32 class_id, u32 hwthread, vm::ptr<u32> intrtag)
+error_code raw_spu_create_interrupt_tag(u32 id, u32 class_id, u32 /*hwthread*/, vm::ptr<u32> intrtag)
 {
 	if (class_id != 0 && class_id != 2)
 	{

@@ -21,10 +21,10 @@ namespace psf
 
 	class entry final
 	{
-		format m_type;
-		u32 m_max_size; // Entry max size (supplementary info, stored in PSF format)
-		u32 m_value_integer; // TODO: is it really unsigned?
-		std::string m_value_string;
+		format m_type{};
+		u32 m_max_size{}; // Entry max size (supplementary info, stored in PSF format)
+		u32 m_value_integer{}; // TODO: is it really unsigned?
+		std::string m_value_string{};
 
 	public:
 		// Construct string entry, assign the value
@@ -53,7 +53,7 @@ namespace psf
 	registry load_object(const fs::file&);
 
 	// Convert PSF registry to SFO binary format
-	void save_object(const fs::file&, const registry&);
+	std::vector<u8> save_object(const registry&, std::vector<u8>&& init = std::vector<u8>{});
 
 	// Get string value or default value
 	std::string_view get_string(const registry& psf, const std::string& key, std::string_view def = ""sv);

@@ -2,6 +2,7 @@
 #include "RSXThread.h"
 
 #include "Emu/Cell/PPUCallback.h"
+#include "Emu/Cell/timers.hpp"
 
 #include "Common/BufferUtils.h"
 #include "Common/GLSLCommon.h"
@@ -10,16 +11,16 @@
 #include "Capture/rsx_capture.h"
 #include "rsx_methods.h"
 #include "rsx_utils.h"
+#include "gcm_printing.h"
 #include "Emu/Cell/lv2/sys_event.h"
+#include "Emu/Cell/lv2/sys_time.h"
 #include "Emu/Cell/Modules/cellGcmSys.h"
 #include "Overlays/overlay_perf_metrics.h"
 #include "Utilities/date_time.h"
 #include "Utilities/span.h"
 #include "Utilities/StrUtil.h"
 
-#include <cereal/archives/binary.hpp>
-#include <cereal/types/unordered_map.hpp>
-
+#include "util/cereal.hpp"
 #include "util/asm.hpp"
 
 #include <sstream>
@@ -37,14 +38,12 @@ rsx::frame_capture_data frame_capture;
 
 extern CellGcmOffsetTable offsetTable;
 extern thread_local std::string(*g_tls_log_prefix)();
-extern u64 sys_time_get_timebase_frequency();
-extern u64 get_timebased_time();
 
 namespace rsx
 {
 	std::function<bool(u32 addr, bool is_writing)> g_access_violation_handler;
 
-	u32 get_address(u32 offset, u32 location, u32 line, u32 col, const char* file, const char* func)
+	u32 get_address(u32 offset, u32 location, bool allow_failure, u32 line, u32 col, const char* file, const char* func)
 	{
 		const auto render = get_current_renderer();
 		std::string_view msg;
@@ -99,10 +98,24 @@ namespace rsx
 
 		// They are handled elsewhere for targeted methods, so it's unexpected for them to be passed here
 		case CELL_GCM_CONTEXT_DMA_TO_MEMORY_GET_NOTIFY0:
-			msg = "CELL_GCM_CONTEXT_DMA_TO_MEMORY_GET_NOTIFY0"sv; break;
+		case CELL_GCM_CONTEXT_DMA_TO_MEMORY_GET_NOTIFY1:
+		case CELL_GCM_CONTEXT_DMA_TO_MEMORY_GET_NOTIFY2:
+		case CELL_GCM_CONTEXT_DMA_TO_MEMORY_GET_NOTIFY3:
+		case CELL_GCM_CONTEXT_DMA_TO_MEMORY_GET_NOTIFY4:
+		case CELL_GCM_CONTEXT_DMA_TO_MEMORY_GET_NOTIFY5:
+		case CELL_GCM_CONTEXT_DMA_TO_MEMORY_GET_NOTIFY6:
+		case CELL_GCM_CONTEXT_DMA_TO_MEMORY_GET_NOTIFY7:
+			msg = "CELL_GCM_CONTEXT_DMA_TO_MEMORY_GET_NOTIFYx"sv; break;
 
 		case CELL_GCM_CONTEXT_DMA_NOTIFY_MAIN_0:
-			msg = "CELL_GCM_CONTEXT_DMA_NOTIFY_MAIN_0"sv; break;
+		case CELL_GCM_CONTEXT_DMA_NOTIFY_MAIN_1:
+		case CELL_GCM_CONTEXT_DMA_NOTIFY_MAIN_2:
+		case CELL_GCM_CONTEXT_DMA_NOTIFY_MAIN_3:
+		case CELL_GCM_CONTEXT_DMA_NOTIFY_MAIN_4:
+		case CELL_GCM_CONTEXT_DMA_NOTIFY_MAIN_5:
+		case CELL_GCM_CONTEXT_DMA_NOTIFY_MAIN_6:
+		case CELL_GCM_CONTEXT_DMA_NOTIFY_MAIN_7:
+			msg = "CELL_GCM_CONTEXT_DMA_NOTIFY_MAIN_x"sv; break;
 
 		case CELL_GCM_CONTEXT_DMA_SEMAPHORE_RW:
 		case CELL_GCM_CONTEXT_DMA_SEMAPHORE_R:
@@ -135,6 +148,11 @@ namespace rsx
 			msg = "Invalid location!"sv;
 			break;
 		}
+		}
+
+		if (allow_failure)
+		{
+			return 0;
 		}
 
 		fmt::throw_exception("rsx::get_address(offset=0x%x, location=0x%x): %s%s", offset, location, msg, src_loc{line, col, file, func});
@@ -347,6 +365,7 @@ namespace rsx
 	}
 
 	thread::thread()
+		: cpu_thread(0x5555'5555)
 	{
 		g_access_violation_handler = [this](u32 address, bool is_writing)
 		{
@@ -365,15 +384,17 @@ namespace rsx
 		{
 			m_overlay_manager = g_fxo->init<rsx::overlays::display_manager>(0);
 		}
+
+		state -= cpu_flag::stop + cpu_flag::wait; // TODO: Remove workaround
 	}
 
 	void thread::capture_frame(const std::string &name)
 	{
-		frame_trace_data::draw_state draw_state = {};
+		frame_trace_data::draw_state draw_state{};
 
 		draw_state.programs = get_programs();
 		draw_state.name = name;
-		frame_debug.draw_calls.push_back(draw_state);
+		frame_debug.draw_calls.emplace_back(std::move(draw_state));
 	}
 
 	void thread::begin()
@@ -469,7 +490,7 @@ namespace rsx
 		if (capture_current_frame)
 		{
 			u32 element_count = rsx::method_registers.current_draw_clause.get_elements_count();
-			capture_frame("Draw " + rsx::to_string(rsx::method_registers.current_draw_clause.primitive) + std::to_string(element_count));
+			capture_frame(fmt::format("Draw %s %d", rsx::method_registers.current_draw_clause.primitive, element_count));
 		}
 	}
 
@@ -483,30 +504,26 @@ namespace rsx
 		while (method_registers.current_draw_clause.next());
 	}
 
-	void thread::operator()()
+	void thread::cpu_task()
 	{
+		while (Emu.IsReady())
 		{
-			// Wait for startup (TODO)
-			while (m_rsx_thread_exiting)
-			{
-				// Wait for external pause events
-				if (external_interrupt_lock)
-				{
-					wait_pause();
-				}
-
-				thread_ctrl::wait_for(1000);
-
-				if (Emu.IsStopped())
-				{
-					return;
-				}
-			}
-
-			on_task();
+			thread_ctrl::wait_for(1000);
 		}
 
+		on_task();
 		on_exit();
+	}
+
+	void thread::cpu_wait(bs_t<cpu_flag>)
+	{
+		if (external_interrupt_lock)
+		{
+			wait_pause();
+		}
+
+		on_semaphore_acquire_wait();
+		std::this_thread::yield();
 	}
 
 	void thread::on_task()
@@ -516,21 +533,51 @@ namespace rsx
 		g_tls_log_prefix = []
 		{
 			const auto rsx = get_current_renderer();
-			return fmt::format("RSX [0x%07x]", +rsx->ctrl->get);
+			return fmt::format("RSX [0x%07x]", rsx->ctrl ? +rsx->ctrl->get : 0);
 		};
+
+		method_registers.init();
 
 		rsx::overlays::reset_performance_overlay();
 
-		g_fxo->get<rsx::dma_manager>()->init();
+		g_fxo->get<rsx::dma_manager>().init();
 		on_init_thread();
 
-		method_registers.init();
+		is_inited = true;
+		is_inited.notify_all();
 
 		if (!zcull_ctrl)
 		{
 			//Backend did not provide an implementation, provide NULL object
 			zcull_ctrl = std::make_unique<::rsx::reports::ZCULL_control>();
 		}
+
+		performance_counters.state = FIFO_state::empty;
+
+		// Wait for startup (TODO)
+		while (m_rsx_thread_exiting)
+		{
+			// Wait for external pause events
+			if (external_interrupt_lock)
+			{
+				wait_pause();
+			}
+
+			// Execute backend-local tasks first
+			do_local_task(performance_counters.state);
+
+			// Update sub-units
+			zcull_ctrl->update(this);
+
+			if (is_stopped())
+			{
+				return;
+			}
+
+			thread_ctrl::wait_for(1000);
+		}
+
+		performance_counters.state = FIFO_state::running;
 
 		fifo_ctrl = std::make_unique<::rsx::FIFO::FIFO_control>(this);
 
@@ -549,7 +596,7 @@ namespace rsx
 			u64 start_time = get_system_time();
 
 			// TODO: exit condition
-			while (!Emu.IsStopped() && !m_rsx_thread_exiting)
+			while (!is_stopped())
 			{
 				const u64 period_time = 1000000 / g_cfg.video.vblank_rate;
 				const u64 wait_sleep = period_time - u64{period_time >= host_min_quantum} * host_min_quantum;
@@ -572,7 +619,7 @@ namespace rsx
 									{ ppu_cmd::sleep, 0 }
 								});
 
-								thread_ctrl::notify(*intr_thread);
+								intr_thread->cmd_notify.notify_one();
 							}
 						}
 						else
@@ -591,7 +638,7 @@ namespace rsx
 					// Save the difference before pause
 					start_time = get_system_time() - start_time;
 
-					while (Emu.IsPaused() && !m_rsx_thread_exiting)
+					while (Emu.IsPaused() && !is_stopped())
 					{
 						thread_ctrl::wait_for(wait_sleep);
 					}
@@ -605,18 +652,14 @@ namespace rsx
 		});
 
 		// Raise priority above other threads
-		thread_ctrl::set_native_priority(1);
+		thread_ctrl::scoped_priority high_prio(+1);
 
-		if (g_cfg.core.thread_scheduler_enabled)
+		if (g_cfg.core.thread_scheduler != thread_scheduler_mode::os)
 		{
 			thread_ctrl::set_thread_affinity_mask(thread_ctrl::get_affinity_mask(thread_class::rsx));
 		}
 
-		// Round to nearest to deal with forward/reverse scaling
-		fesetround(FE_TONEAREST);
-
-		// TODO: exit condition
-		while (true)
+		while (!test_stopped())
 		{
 			// Wait for external pause events
 			if (external_interrupt_lock)
@@ -640,20 +683,6 @@ namespace rsx
 
 			// Execute FIFO queue
 			run_FIFO();
-
-			if (!Emu.IsRunning())
-			{
-				// Idle if emulation paused
-				while (Emu.IsPaused())
-				{
-					std::this_thread::sleep_for(1ms);
-				}
-
-				if (Emu.IsStopped())
-				{
-					break;
-				}
-			}
 		}
 	}
 
@@ -667,7 +696,8 @@ namespace rsx
 		do_local_task(rsx::FIFO_state::lock_wait);
 
 		m_rsx_thread_exiting = true;
-		g_fxo->get<rsx::dma_manager>()->join();
+		g_fxo->get<rsx::dma_manager>().join();
+		state += cpu_flag::exit;
 	}
 
 	void thread::fill_scale_offset_data(void *buffer, bool flip_y) const
@@ -743,12 +773,12 @@ namespace rsx
 	* Fill buffer with vertex program constants.
 	* Buffer must be at least 512 float4 wide.
 	*/
-	void thread::fill_vertex_program_constants_data(void *buffer)
+	void thread::fill_vertex_program_constants_data(void* buffer)
 	{
 		memcpy(buffer, rsx::method_registers.transform_constants.data(), 468 * 4 * sizeof(float));
 	}
 
-	void thread::fill_fragment_state_buffer(void *buffer, const RSXFragmentProgram &fragment_program)
+	void thread::fill_fragment_state_buffer(void* buffer, const RSXFragmentProgram& /*fragment_program*/)
 	{
 		u32 rop_control = 0u;
 
@@ -824,7 +854,7 @@ namespace rsx
 		stream_vector(dst + 4, 0u, fog_mode, std::bit_cast<u32>(wpos_scale), std::bit_cast<u32>(wpos_bias));
 	}
 
-	void thread::fill_fragment_texture_parameters(void *buffer, const RSXFragmentProgram &fragment_program)
+	void thread::fill_fragment_texture_parameters(void* buffer, const RSXFragmentProgram& fragment_program)
 	{
 		// Copy only the relevant section
 		if (current_fp_metadata.referenced_textures_mask)
@@ -889,8 +919,8 @@ namespace rsx
 		// Force aligned indices as realhw
 		const u32 address = (0 - type_size) & get_address(rsx::method_registers.index_array_address(), rsx::method_registers.index_array_location());
 
-		const bool is_primitive_restart_enabled = rsx::method_registers.restart_index_enabled();
-		const u32 primitive_restart_index = rsx::method_registers.restart_index();
+		//const bool is_primitive_restart_enabled = rsx::method_registers.restart_index_enabled();
+		//const u32 primitive_restart_index = rsx::method_registers.restart_index();
 
 		const u32 first = draw_indexed_clause.min_index();
 		const u32 count = draw_indexed_clause.get_elements_count();
@@ -946,21 +976,6 @@ namespace rsx
 		}
 	}
 
-	namespace
-	{
-		bool is_int_type(rsx::vertex_base_type type)
-		{
-			switch (type)
-			{
-			case rsx::vertex_base_type::s32k:
-			case rsx::vertex_base_type::ub256:
-				return true;
-			default:
-				return false;
-			}
-		}
-	}
-
 	std::array<u32, 4> thread::get_color_surface_addresses() const
 	{
 		u32 offset_color[] =
@@ -1011,8 +1026,8 @@ namespace rsx
 			return;
 		}
 
-		const u16 clip_x = rsx::method_registers.surface_clip_origin_x();
-		const u16 clip_y = rsx::method_registers.surface_clip_origin_y();
+		//const u16 clip_x = rsx::method_registers.surface_clip_origin_x();
+		//const u16 clip_y = rsx::method_registers.surface_clip_origin_y();
 
 		layout.color_addresses = get_color_surface_addresses();
 		layout.zeta_address = get_zeta_surface_address();
@@ -1857,7 +1872,7 @@ namespace rsx
 					texture_control |= (1 << texture_control_bits::ALPHAKILL);
 				}
 
-				const u32 texaddr = rsx::get_address(tex.offset(), tex.location());
+				//const u32 texaddr = rsx::get_address(tex.offset(), tex.location());
 				const u32 raw_format = tex.format();
 				const u32 format = raw_format & ~(CELL_GCM_TEXTURE_LN | CELL_GCM_TEXTURE_UN);
 
@@ -2022,9 +2037,8 @@ namespace rsx
 		ctrl = vm::_ptr<RsxDmaControl>(ctrlAddress);
 		flip_status = CELL_GCM_DISPLAY_FLIP_STATUS_DONE;
 
-		memset(display_buffers, 0, sizeof(display_buffers));
+		std::memset(display_buffers, 0, sizeof(display_buffers));
 
-		on_init_rsx();
 		m_rsx_thread_exiting = false;
 	}
 
@@ -2167,7 +2181,8 @@ namespace rsx
 		{
 			if (layout.attribute_placement[index] == attribute_buffer_placement::none)
 			{
-				reinterpret_cast<u64*>(buffer)[index] = 0;
+				static constexpr u64 zero = 0;
+				std::memcpy(buffer + index * 2, &zero, sizeof(zero));
 				continue;
 			}
 
@@ -2355,7 +2370,7 @@ namespace rsx
 				const u32 data_size = range.second * block.attribute_stride;
 				const u32 vertex_base = range.first * block.attribute_stride;
 
-				g_fxo->get<rsx::dma_manager>()->copy(persistent, vm::_ptr<char>(block.real_offset_address) + vertex_base, data_size);
+				g_fxo->get<rsx::dma_manager>().copy(persistent, vm::_ptr<char>(block.real_offset_address) + vertex_base, data_size);
 				persistent += data_size;
 			}
 		}
@@ -2508,7 +2523,7 @@ namespace rsx
 		m_graphics_state |= rsx::pipeline_state::fragment_constants_dirty;
 
 		// DMA sync; if you need this, don't use MTRSX
-		// g_fxo->get<rsx::dma_manager>()->sync();
+		// g_fxo->get<rsx::dma_manager>().sync();
 
 		//TODO: On sync every sub-unit should finish any pending tasks
 		//Might cause zcull lockup due to zombie 'unclaimed reports' which are not forcefully removed currently
@@ -2563,6 +2578,18 @@ namespace rsx
 		}
 
 		recovered_fifo_cmds_history.push({fifo_ctrl->last_cmd(), current_time});
+	}
+
+	std::vector<std::pair<u32, u32>> thread::dump_callstack_list() const
+	{
+		std::vector<std::pair<u32, u32>> result;
+
+		if (u32 addr = fifo_ret_addr; addr != RSX_CALL_STACK_EMPTY)
+		{
+			result.emplace_back(addr, 0);
+		}
+
+		return result;
 	}
 
 	void thread::fifo_wake_delay(u64 div)
@@ -2624,6 +2651,48 @@ namespace rsx
 	{
 		// Last fifo cmd for logging and utility
 		return fifo_ctrl->last_cmd();
+	}
+
+	void invalid_method(thread*, u32, u32);
+
+	std::string thread::dump_regs() const
+	{
+		std::string result;
+
+		for (u32 i = 0; i < 1 << 14; i++)
+		{
+			if (rsx::methods[i] == &invalid_method)
+			{
+				continue;
+			}
+
+			switch (i)
+			{
+			case NV4097_NO_OPERATION:
+			case NV4097_INVALIDATE_L2:
+			case NV4097_INVALIDATE_VERTEX_FILE:
+			case NV4097_INVALIDATE_VERTEX_CACHE_FILE:
+			case NV4097_INVALIDATE_ZCULL:
+			case NV4097_WAIT_FOR_IDLE:
+			case NV4097_PM_TRIGGER:
+			case NV4097_ZCULL_SYNC:
+				continue;
+
+			default:
+			{
+				if (i >= NV308A_COLOR && i < NV3089_SET_OBJECT)
+				{
+					continue;
+				}
+
+				break;
+			}
+			}
+
+			fmt::append(result, "[%04x] %s\n", i, ensure(rsx::get_pretty_printing_function(i))(i, method_registers.registers[i]));
+		}
+
+		return result;
 	}
 
 	flags32_t thread::read_barrier(u32 memory_address, u32 memory_range, bool unconditional)
@@ -2688,7 +2757,7 @@ namespace rsx
 					{
 						// Each 64 entries are grouped by a bit
 						const u64 io_event = SYS_RSX_EVENT_UNMAPPED_BASE << i;
-						g_fxo->get<lv2_rsx_config>()->send_event(0, io_event, to_unmap);
+						g_fxo->get<lv2_rsx_config>().send_event(0, io_event, to_unmap);
 					}
 				}
 			}
@@ -2701,13 +2770,13 @@ namespace rsx
 				{
 					io >>= 20;
 
-					const auto cfg = g_fxo->get<gcm_config>();
-					std::lock_guard lock(cfg->gcmio_mutex);
+					auto& cfg = g_fxo->get<gcm_config>();
+					std::lock_guard lock(cfg.gcmio_mutex);
 
 					for (const u32 end = ea + (size >> 20); ea < end;)
 					{
-						cfg->offsetTable.ioAddress[ea++] = 0xFFFF;
-						cfg->offsetTable.eaAddress[io++] = 0xFFFF;
+						cfg.offsetTable.ioAddress[ea++] = 0xFFFF;
+						cfg.offsetTable.eaAddress[io++] = 0xFFFF;
 					}
 				}
 			}
@@ -2772,7 +2841,7 @@ namespace rsx
 		{
 			if (g_cfg.video.multithreaded_rsx)
 			{
-				g_fxo->get<rsx::dma_manager>()->sync();
+				g_fxo->get<rsx::dma_manager>().sync();
 			}
 
 			external_interrupt_ack.store(true);
@@ -2831,17 +2900,22 @@ namespace rsx
 		else if (capture_current_frame)
 		{
 			capture_current_frame = false;
-			std::stringstream os;
-			cereal::BinaryOutputArchive archive(os);
-			const std::string& filePath = fs::get_config_dir() + "captures/" + Emu.GetTitleID() + "_" + date_time::current_time_narrow() + "_capture.rrc";
-			archive(frame_capture);
-			{
-				// todo: may want to compress this data?
-				fs::file f(filePath, fs::rewrite);
-				f.write(os.str());
-			}
 
-			rsx_log.success("capture successful: %s", filePath.c_str());
+			const std::string file_path = fs::get_config_dir() + "captures/" + Emu.GetTitleID() + "_" + date_time::current_time_narrow() + "_capture.rrc";
+
+			// todo: may want to compress this data?
+			const std::string file_data = cereal_serialize(frame_capture);
+
+			fs::pending_file temp(file_path);
+
+			if (temp.file && (temp.file.write(file_data), temp.commit(false)))
+			{
+				rsx_log.success("Capture successful: %s", file_path);
+			}
+			else
+			{
+				rsx_log.fatal("Capture failed: %s (%s)", file_path, fs::g_tls_error);
+			}
 
 			frame_capture.reset();
 			Emu.Pause();
@@ -3006,7 +3080,8 @@ namespace rsx
 				{ ppu_cmd::sleep, 0 }
 			});
 
-			thread_ctrl::notify(*intr_thread);
+			intr_thread->cmd_notify++;
+			intr_thread->cmd_notify.notify_one();
 		}
 	}
 

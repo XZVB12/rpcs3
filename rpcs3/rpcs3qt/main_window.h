@@ -21,10 +21,16 @@ class game_list_frame;
 class gui_settings;
 class emu_settings;
 class persistent_settings;
+class kernel_explorer;
 
 struct gui_game_info;
 
 enum class game_boot_result : u32;
+
+namespace compat
+{
+	struct package_info;
+}
 
 namespace Ui
 {
@@ -75,13 +81,16 @@ class main_window : public QMainWindow
 
 public:
 	explicit main_window(std::shared_ptr<gui_settings> gui_settings, std::shared_ptr<emu_settings> emu_settings, std::shared_ptr<persistent_settings> persistent_settings, QWidget *parent = 0);
-	void Init();
 	~main_window();
+	bool Init(bool with_cli_boot);
 	QIcon GetAppIcon();
+	bool OnMissingFw();
+	void InstallPackages(QStringList file_paths = QStringList());
+	void InstallPup(QString filePath = "");
 
 Q_SIGNALS:
 	void RequestLanguageChange(const QString& language);
-	void RequestGlobalStylesheetChange(const QString& stylesheet_path);
+	void RequestGlobalStylesheetChange();
 	void RequestTrophyManagerRepaint();
 	void NotifyEmuSettingsChange();
 
@@ -133,11 +142,13 @@ private:
 
 	static bool InstallRapFile(const QString& path, const std::string& filename);
 
-	void InstallPackages(QStringList file_paths = QStringList());
-	void HandlePackageInstallation(QStringList file_paths = QStringList());
+	void HandlePackageInstallation(QStringList file_paths);
 
-	void InstallPup(QString filePath = "");
-	void HandlePupInstallation(QString file_path = "");
+	void HandlePupInstallation(QString file_path, QString dir_path = "");
+	void ExtractPup();
+
+	void ExtractTar();
+	void ExtractMSELF();
 
 	drop_type IsValidFile(const QMimeData& md, QStringList* drop_paths = nullptr);
 	void AddGamesFromDir(const QString& path);
@@ -164,6 +175,7 @@ private:
 	log_frame* m_log_frame = nullptr;
 	debugger_frame* m_debugger_frame = nullptr;
 	game_list_frame* m_game_list_frame = nullptr;
+	kernel_explorer* m_kernel_explorer = nullptr;
 	std::shared_ptr<gui_settings> m_gui_settings;
 	std::shared_ptr<emu_settings> m_emu_settings;
 	std::shared_ptr<persistent_settings> m_persistent_settings;

@@ -1,7 +1,10 @@
 #include "stdafx.h"
 #include "../Common/BufferUtils.h"
 #include "../rsx_methods.h"
+
+#include "VKAsyncScheduler.h"
 #include "VKGSRender.h"
+#include "vkutils/buffer_object.h"
 
 namespace vk
 {
@@ -385,7 +388,7 @@ void VKGSRender::bind_texture_env()
 				//case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
 					break;
 				case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-					ensure(sampler_state->upload_context == rsx::texture_upload_context::blit_engine_dst);
+					//ensure(sampler_state->upload_context == rsx::texture_upload_context::blit_engine_dst);
 					raw->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 					break;
 				case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
@@ -525,7 +528,7 @@ void VKGSRender::bind_texture_env()
 		//case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
 			break;
 		case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-			ensure(sampler_state->upload_context == rsx::texture_upload_context::blit_engine_dst);
+			//ensure(sampler_state->upload_context == rsx::texture_upload_context::blit_engine_dst);
 			raw->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 			break;
 		case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
@@ -633,7 +636,7 @@ void VKGSRender::bind_interpreter_texture_env()
 					//case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
 					break;
 				case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-					ensure(sampler_state->upload_context == rsx::texture_upload_context::blit_engine_dst);
+					//ensure(sampler_state->upload_context == rsx::texture_upload_context::blit_engine_dst);
 					raw->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 					break;
 				case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
@@ -834,7 +837,7 @@ void VKGSRender::emit_geometry(u32 sub_index)
 			info.sType = VK_STRUCTURE_TYPE_CONDITIONAL_RENDERING_BEGIN_INFO_EXT;
 			info.buffer = m_cond_render_buffer->value;
 
-			m_device->cmdBeginConditionalRenderingEXT(*m_current_command_buffer, &info);
+			m_device->_vkCmdBeginConditionalRenderingEXT(*m_current_command_buffer, &info);
 			m_current_command_buffer->flags |= vk::command_buffer::cb_has_conditional_render;
 		}
 	}
@@ -959,6 +962,12 @@ void VKGSRender::end()
 	load_program_env();
 	m_frame_stats.setup_time += m_profiler.duration();
 
+	// Sync any async scheduler tasks
+	if (auto ev = g_fxo->get<vk::async_scheduler_thread>().get_primary_sync_label())
+	{
+		ev->gpu_wait(*m_current_command_buffer);
+	}
+
 	if (!m_shader_interpreter.is_interpreter(m_program)) [[likely]]
 	{
 		bind_texture_env();
@@ -1028,7 +1037,7 @@ void VKGSRender::end()
 
 	if (m_current_command_buffer->flags & vk::command_buffer::cb_has_conditional_render)
 	{
-		m_device->cmdEndConditionalRenderingEXT(*m_current_command_buffer);
+		m_device->_vkCmdEndConditionalRenderingEXT(*m_current_command_buffer);
 		m_current_command_buffer->flags &= ~(vk::command_buffer::cb_has_conditional_render);
 	}
 

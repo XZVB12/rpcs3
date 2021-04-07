@@ -82,11 +82,11 @@ sudo apt-get install cmake
 
 #### Fedora
 
-    sudo dnf install alsa-lib-devel cmake glew glew-devel libatomic libevdev-devel libudev-devel openal-devel qt5-devel qt5-qtbase-private-devel vulkan-devel
+    sudo dnf install alsa-lib-devel cmake glew glew-devel libatomic libevdev-devel libudev-devel openal-devel qt5-qtbase-devel qt5-qtbase-private-devel vulkan-devel
 
 #### OpenSUSE
 
-    sudo zypper install git cmake libasound2 libpulse-devel openal-soft-devel glew-devel zlib-devel libedit-devel vulkan-devel libudev-devel libqt5-qtbase-devel libevdev-devel
+    sudo zypper install git cmake libasound2 libpulse-devel openal-soft-devel glew-devel zlib-devel libedit-devel vulkan-devel libudev-devel libqt5-qtbase-devel libqt5gui-private-headers-devel libevdev-devel
 
 ## Setup the project
 
@@ -108,11 +108,16 @@ git submodule update --init
 
 #### Building the projects
 
-Open `rpcs3.sln`. The recommended build configuration is `Release - LLVM` for all purposes.
+Open `rpcs3.sln`. The recommended build configuration is `Release`. (On older revisions: `Release - LLVM`)
 
 You may want to download the precompiled [LLVM libs](https://github.com/RPCS3/llvm-mirror/releases/download/custom-build-win/llvmlibs_mt.7z) and extract them to the root rpcs3 folder (which contains `rpcs3.sln`), as well as download and extract the [additional libs](https://github.com/RPCS3/glslang/releases/download/custom-build-win/glslanglibs_mt.7z) to `lib\%CONFIGURATION%-x64\` to speed up compilation time (unoptimised/debug libs are currently not available precompiled).
 
-If you're not using the precompiled libs, build the projects in *__BUILD_BEFORE* folder: right-click on every project > *Build*.
+If you're not using the precompiled libs, build the following projects in *__BUILD_BEFORE* folder by right-clicking on a project > *Build*.:
+* glslang-build
+* **Either** llvm_build **or** llvm_build_clang_cl
+* spirv-tools-build
+
+Afterwards:
 
 `Build > Build Solution`
 

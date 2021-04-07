@@ -13,14 +13,16 @@ const spu_decoder<spu_iflag> s_spu_iflag;
 u32 SPUDisAsm::disasm(u32 pc)
 {
 	dump_pc = pc;
-	m_op = *reinterpret_cast<const atomic_be_t<u32>*>(m_offset + pc);
+	be_t<u32> op;
+	std::memcpy(&op, m_offset + pc, 4);
+	m_op = op;
 	(this->*(s_spu_disasm.decode(m_op)))({ m_op });
 	return 4;
 }
 
 std::pair<bool, v128> SPUDisAsm::try_get_const_value(u32 reg, u32 pc) const
 {
-	if (m_mode != CPUDisAsm_InterpreterMode)
+	if (m_mode != cpu_disasm_mode::interpreter)
 	{
 		return {};
 	}
@@ -56,7 +58,7 @@ std::pair<bool, v128> SPUDisAsm::try_get_const_value(u32 reg, u32 pc) const
 			continue;
 		}
 
-		const auto flag = s_spu_iflag.decode(opcode);
+		//const auto flag = s_spu_iflag.decode(opcode);
 
 		// TODO: It detects spurious register modifications
 		if (u32 dst = type & spu_itype::_quadrop ? +op0.rt4 : +op0.rt; dst == reg)

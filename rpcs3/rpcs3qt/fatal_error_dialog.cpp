@@ -2,11 +2,11 @@
 
 #include <QLayout>
 #include <QTextDocument>
+#include <QIcon>
 
-#include <string>
-
-fatal_error_dialog::fatal_error_dialog(const std::string& text) : QMessageBox()
+fatal_error_dialog::fatal_error_dialog(std::string_view text) : QMessageBox()
 {
+	setWindowIcon(QIcon(":/rpcs3.ico"));
 	setWindowTitle(tr("RPCS3: Fatal Error"));
 	setIcon(QMessageBox::Icon::Critical);
 	setTextFormat(Qt::TextFormat::RichText);
@@ -18,7 +18,7 @@ fatal_error_dialog::fatal_error_dialog(const std::string& text) : QMessageBox()
 				%3<br>
 			</p>
 			)")
-		.arg(Qt::convertFromPlainText(QString::fromStdString(text)))
+		.arg(Qt::convertFromPlainText(QString::fromUtf8(text.data(), text.size())))
 		.arg(tr("HOW TO REPORT ERRORS:"))
 		.arg(tr("Please, don't send incorrect reports. Thanks for understanding.")));
 	layout()->setSizeConstraint(QLayout::SetFixedSize);

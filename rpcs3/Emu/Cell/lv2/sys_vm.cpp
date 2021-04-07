@@ -4,9 +4,8 @@
 #include "Emu/IdManager.h"
 #include "Emu/Cell/ErrorCodes.h"
 #include "Emu/Cell/PPUThread.h"
+#include "Emu/Cell/timers.hpp"
 #include "Emu/Memory/vm_locking.h"
-
-extern u64 get_timebased_time();
 
 sys_vm_t::sys_vm_t(u32 _addr, u32 vsize, lv2_memory_container* ct, u32 psize)
 	: ct(ct)
@@ -35,7 +34,7 @@ error_code sys_vm_memory_map(ppu_thread& ppu, u32 vsize, u32 psize, u32 cid, u64
 {
 	ppu.state += cpu_flag::wait;
 
-	sys_vm.error("sys_vm_memory_map(vsize=0x%x, psize=0x%x, cid=0x%x, flags=0x%llx, policy=0x%llx, addr=*0x%x)", vsize, psize, cid, flag, policy, addr);
+	sys_vm.warning("sys_vm_memory_map(vsize=0x%x, psize=0x%x, cid=0x%x, flags=0x%x, policy=0x%x, addr=*0x%x)", vsize, psize, cid, flag, policy, addr);
 
 	if (!vsize || !psize || vsize % 0x2000000 || vsize > 0x10000000 || psize > 0x10000000 || policy != SYS_VM_POLICY_AUTO_RECOMMENDED)
 	{
@@ -44,14 +43,14 @@ error_code sys_vm_memory_map(ppu_thread& ppu, u32 vsize, u32 psize, u32 cid, u64
 
 	const auto idm_ct = idm::get<lv2_memory_container>(cid);
 
-	const auto ct = cid == SYS_MEMORY_CONTAINER_ID_INVALID ? g_fxo->get<lv2_memory_container>() : idm_ct.get();
+	const auto ct = cid == SYS_MEMORY_CONTAINER_ID_INVALID ? &g_fxo->get<lv2_memory_container>() : idm_ct.get();
 
 	if (!ct)
 	{
 		return CELL_ESRCH;
 	}
 
-	if (!g_fxo->get<sys_vm_global_t>()->total_vsize.fetch_op([vsize](u32& size)
+	if (!g_fxo->get<sys_vm_global_t>().total_vsize.fetch_op([vsize](u32& size)
 	{
 		// A single process can hold up to 256MB of virtual memory, even on DECR
 		if (0x10000000 - size < vsize)
@@ -68,7 +67,7 @@ error_code sys_vm_memory_map(ppu_thread& ppu, u32 vsize, u32 psize, u32 cid, u64
 
 	if (!ct->take(psize))
 	{
-		g_fxo->get<sys_vm_global_t>()->total_vsize -= vsize;
+		g_fxo->get<sys_vm_global_t>().total_vsize -= vsize;
 		return CELL_ENOMEM;
 	}
 
@@ -87,7 +86,7 @@ error_code sys_vm_memory_map(ppu_thread& ppu, u32 vsize, u32 psize, u32 cid, u64
 	}
 
 	ct->used -= psize;
-	g_fxo->get<sys_vm_global_t>()->total_vsize -= vsize;
+	g_fxo->get<sys_vm_global_t>().total_vsize -= vsize;
 	return CELL_ENOMEM;
 }
 
@@ -121,7 +120,7 @@ error_code sys_vm_unmap(ppu_thread& ppu, u32 addr)
 
 		// Return memory
 		vmo.ct->used -= vmo.psize;
-		g_fxo->get<sys_vm_global_t>()->total_vsize -= vmo.size;
+		g_fxo->get<sys_vm_global_t>().total_vsize -= vmo.size;
 	});
 
 	if (!vmo)

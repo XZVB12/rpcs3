@@ -16,7 +16,8 @@ LOG_CHANNEL(gui_log, "GUI");
 constexpr auto qstr = QString::fromStdString;
 inline std::string sstr(const QString& _in) { return _in.toStdString(); }
 
-cg_disasm_window::cg_disasm_window(std::shared_ptr<gui_settings> xSettings): xgui_settings(xSettings)
+cg_disasm_window::cg_disasm_window(std::shared_ptr<gui_settings> xSettings)
+	: m_gui_settings(xSettings)
 {
 	setWindowTitle(tr("Cg Disasm"));
 	setObjectName("cg_disasm");
@@ -26,7 +27,7 @@ cg_disasm_window::cg_disasm_window(std::shared_ptr<gui_settings> xSettings): xgu
 	setMinimumSize(QSize(200, 150)); // seems fine on win 10
 	resize(QSize(620, 395));
 
-	m_path_last = xgui_settings->GetValue(gui::fd_cg_disasm).toString();
+	m_path_last = m_gui_settings->GetValue(gui::fd_cg_disasm).toString();
 
 	m_disasm_text = new QTextEdit(this);
 	m_disasm_text->setReadOnly(true);
@@ -63,13 +64,13 @@ cg_disasm_window::cg_disasm_window(std::shared_ptr<gui_settings> xSettings): xgu
 
 void cg_disasm_window::ShowContextMenu(const QPoint &pos)
 {
-	QMenu myMenu;
+	QMenu menu;
 	QAction* clear = new QAction(tr("&Clear"));
 	QAction* open = new QAction(tr("Open &Cg binary program"));
 
-	myMenu.addAction(open);
-	myMenu.addSeparator();
-	myMenu.addAction(clear);
+	menu.addAction(open);
+	menu.addSeparator();
+	menu.addAction(clear);
 
 	connect(clear, &QAction::triggered, [this]()
 	{
@@ -79,9 +80,10 @@ void cg_disasm_window::ShowContextMenu(const QPoint &pos)
 
 	connect(open, &QAction::triggered, [this]()
 	{
-		QString filePath = QFileDialog::getOpenFileName(this, tr("Select Cg program object"), m_path_last, tr("Cg program objects (*.fpo;*.vpo);;"));
-		if (filePath == NULL) return;
-		m_path_last = filePath;
+		const QString file_path = QFileDialog::getOpenFileName(this, tr("Select Cg program object"), m_path_last, tr("Cg program objects (*.fpo;*.vpo);;"));
+		if (file_path.isEmpty())
+			return;
+		m_path_last = file_path;
 		ShowDisasm();
 	});
 
@@ -102,7 +104,7 @@ void cg_disasm_window::ShowContextMenu(const QPoint &pos)
 		origin = mapToGlobal(pos);
 	}
 
-	myMenu.exec(origin);
+	menu.exec(origin);
 }
 
 void cg_disasm_window::ShowDisasm()
@@ -113,7 +115,7 @@ void cg_disasm_window::ShowDisasm()
 		disasm.BuildShaderBody();
 		m_disasm_text->setText(qstr(disasm.GetArbShader()));
 		m_glsl_text->setText(qstr(disasm.GetGlslShader()));
-		xgui_settings->SetValue(gui::fd_cg_disasm, m_path_last);
+		m_gui_settings->SetValue(gui::fd_cg_disasm, m_path_last);
 	}
 	else if (!m_path_last.isEmpty())
 	{

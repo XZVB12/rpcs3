@@ -344,7 +344,9 @@ struct fmt::cfmt_src
 	template <typename T>
 	T get(usz index) const
 	{
-		return *reinterpret_cast<const T*>(reinterpret_cast<const u8*>(args + index));
+		T res{};
+		std::memcpy(&res, reinterpret_cast<const u8*>(args + index), sizeof(res));
+		return res;
 	}
 
 	void skip(usz extra)
@@ -418,32 +420,45 @@ std::string fmt::replace_all(const std::string& src, const std::string& from, co
 	return target;
 }
 
-std::vector<std::string> fmt::split(const std::string& source, std::initializer_list<std::string> separators, bool is_skip_empty)
+std::vector<std::string> fmt::split(std::string_view source, std::initializer_list<std::string_view> separators, bool is_skip_empty)
 {
 	std::vector<std::string> result;
 
-	usz cursor_begin = 0;
-
-	for (usz cursor_end = 0; cursor_end < source.length(); ++cursor_end)
+	for (usz index = 0; index < source.size();)
 	{
+		usz pos = -1;
+		usz sep_size = 0;
+
 		for (auto& separator : separators)
 		{
-			if (strncmp(source.c_str() + cursor_end, separator.c_str(), separator.length()) == 0)
+			if (usz pos0 = source.find(separator, index); pos0 < pos)
 			{
-				std::string candidate = source.substr(cursor_begin, cursor_end - cursor_begin);
-				if (!is_skip_empty || !candidate.empty())
-					result.push_back(candidate);
-
-				cursor_begin = cursor_end + separator.length();
-				cursor_end   = cursor_begin - 1;
-				break;
+				pos = pos0;
+				sep_size = separator.size();
 			}
 		}
+
+		if (!sep_size)
+		{
+			result.emplace_back(&source[index], source.size() - index);
+			return result;
+		}
+
+		std::string_view piece = {&source[index], pos - index};
+
+		index = pos + sep_size;
+
+		if (piece.empty() && is_skip_empty)
+		{
+			continue;
+		}
+
+		result.emplace_back(std::string(piece));
 	}
 
-	if (cursor_begin != source.length())
+	if (result.empty() && !is_skip_empty)
 	{
-		result.push_back(source.substr(cursor_begin));
+		result.emplace_back();
 	}
 
 	return result;

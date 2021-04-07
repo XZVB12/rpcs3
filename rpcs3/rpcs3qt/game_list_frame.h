@@ -25,7 +25,7 @@ struct gui_game_info
 {
 	GameInfo info;
 	QString localized_category;
-	compat_status compat;
+	compat::status compat;
 	QPixmap icon;
 	QPixmap pxmap;
 	bool hasCustomConfig;
@@ -40,7 +40,7 @@ class game_list_frame : public custom_dock_widget
 	Q_OBJECT
 
 public:
-	explicit game_list_frame(std::shared_ptr<gui_settings> gui_settings, std::shared_ptr<emu_settings> emu_settings, std::shared_ptr<persistent_settings> persistent_settings, QWidget *parent = nullptr);
+	explicit game_list_frame(std::shared_ptr<gui_settings> gui_settings, std::shared_ptr<emu_settings> emu_settings, std::shared_ptr<persistent_settings> persistent_settings, QWidget* parent = nullptr);
 	~game_list_frame();
 
 	/** Fix columns with width smaller than the minimal section size */
@@ -69,6 +69,8 @@ public:
 
 	void SetShowHidden(bool show);
 
+	game_compatibility* GetGameCompatibility() const { return m_game_compat; };
+
 	QList<game_info> GetGameInfo() const;
 
 	// Returns the visible version string in the game list
@@ -84,6 +86,7 @@ public Q_SLOTS:
 	void SetListMode(const bool& is_list);
 	void SetSearchText(const QString& text);
 	void SetShowCompatibilityInGrid(bool show);
+	void SetShowCustomIcons(bool show);
 
 private Q_SLOTS:
 	void OnColClicked(int col);
@@ -102,7 +105,7 @@ protected:
 	void resizeEvent(QResizeEvent *event) override;
 	bool eventFilter(QObject *object, QEvent *event) override;
 private:
-	QPixmap PaintedPixmap(const QPixmap& icon, bool paint_config_icon = false, bool paint_pad_config_icon = false, const QColor& color = QColor());
+	QPixmap PaintedPixmap(QPixmap icon, bool paint_config_icon = false, bool paint_pad_config_icon = false, const QColor& color = QColor());
 	QColor getGridCompatibilityColor(const QString& string);
 	void ShowCustomConfigIcon(game_info game);
 	void PopulateGameList();
@@ -170,4 +173,5 @@ private:
 	qreal m_margin_factor;
 	qreal m_text_factor;
 	bool m_draw_compat_status_to_grid = false;
+	bool m_show_custom_icons = true;
 };

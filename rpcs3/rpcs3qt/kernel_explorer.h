@@ -1,9 +1,10 @@
 #pragma once
 
 #include <QDialog>
-#include <QTreeWidget>
 
 #include "util/types.hpp"
+
+class QTreeWidget;
 
 class kernel_explorer : public QDialog
 {

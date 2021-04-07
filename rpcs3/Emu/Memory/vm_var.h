@@ -14,9 +14,9 @@ namespace vm
 			return vm::cast(vm::alloc(size, Location, std::max<u32>(align, 0x10000)));
 		}
 
-		static inline void dealloc(u32 addr, u32 size = 0) noexcept
+		static inline void dealloc(u32 addr, u32 /*size*/ = 0) noexcept
 		{
-			return vm::dealloc_verbose_nothrow(addr, Location);
+			ensure(vm::dealloc(addr, Location));
 		}
 	};
 
